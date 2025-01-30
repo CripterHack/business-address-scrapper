@@ -1,0 +1,38 @@
+# Include development dependencies
+-r requirements-dev.txt
+
+# Additional Testing Tools
+pytest-selenium==4.1.1
+pytest-html==4.1.1
+pytest-timeout==2.2.0
+pytest-rerunfailures==13.0
+pytest-randomly==3.15.0
+pytest-benchmark==4.0.0
+pytest-clarity==1.0.1
+pytest-sugar==0.9.7
+
+# Mock Services
+responses==0.24.1
+httpretty==1.1.4
+vcr==4.2.1
+moto==4.2.12
+
+# Test Data Generation
+factory-boy==3.3.0
+mimesis==11.1.0
+
+# Code Coverage
+coverage-badge==1.1.0
+diff-cover==8.0.1
+
+# Performance Testing
+locust==2.20.0
+apache-benchmark==0.1.0
+
+# Security Testing
+owasp-zap-api-python==0.4.0
+safety==2.3.5
+
+# Browser Testing
+selenium-wire==5.1.0
+webdriver-manager==4.0.1 

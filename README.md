@@ -1,151 +1,241 @@
-# Web Scraper Project
+[![Python Version](https://img.shields.io/badge/python-3.8%2B-blue.svg)](https://www.python.org/downloads/)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Code Style](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+[![Type Checking](https://img.shields.io/badge/type%20checking-mypy-blue.svg)](http://mypy-lang.org/)
 
-This project is a comprehensive web scraping tool designed to extract specific business information from the web. It leverages the power of Scrapy for efficient crawling, integrates OCR for captcha solving, and utilizes a local LLaMA model to enhance search queries. The scraper reads a list of business names from a CSV file, searches for relevant information, and outputs the data into a structured CSV format.
+# Business Address Scraper
 
-## Table of Contents
+## 📦 Dependencies
 
-- [Features](#features)
-- [Prerequisites](#prerequisites)
-- [Installation](#installation)
-- [Usage](#usage)
-- [Project Structure](#project-structure)
-- [Troubleshooting and Debugging](#troubleshooting-and-debugging)
-- [Testing](#testing)
-- [Contributing](#contributing)
-- [To-Do Checklist](#to-do-checklist)
+### Required
+- Python 3.8+
+- PostgreSQL
+- Redis (optional, for caching)
 
-## Features
+### Python Packages
+- streamlit
+- pandas
+- plotly
+- scrapy
+- psycopg2-binary
+- redis (if using Redis cache)
 
-- **Efficient Web Crawling**: Utilizes Scrapy for high-performance web scraping.
-- **Captcha Solving**: Integrates Tesseract-OCR for solving captchas encountered during scraping.
-- **Enhanced Search Queries**: Uses a local LLaMA model to refine search queries for better accuracy.
-- **Proxy Rotation**: Implements proxy rotation to avoid IP bans and mimic human-like browsing.
-- **CSV Input/Output**: Reads business names from a CSV file and outputs the scraped data into a CSV file.
+## 🔧 Features
 
-## Prerequisites
+- 📊 Interactive Dashboard
+- 🔍 Business Search Interface
+- 💾 Data Import/Export
+- ⚙️ System Configuration
+- 📈 Performance Metrics
+- 🕷️ Web Scraping Capabilities
 
-Before running the project, ensure you have the following installed:
+## 🔒 Security
 
-- **Python 3.x**: The programming language used for the project.
-- **Tesseract-OCR**: For captcha solving.
-  - **Windows**: [Download and install Tesseract-OCR](https://github.com/UB-Mannheim/tesseract/wiki).
-  - **Linux/macOS**: Install via package manager:
-    ```bash
-    sudo apt install tesseract-ocr
-    ```
-- **Google Chrome**: Required for Selenium to simulate browser interactions.
-- **ChromeDriver**: Compatible with your Chrome version. [Download here](https://sites.google.com/a/chromium.org/chromedriver/).
+- Secure environment variable handling through .env files
+- SQL injection prevention using parameterized queries
+- Input validation and sanitization
+- Rate limiting for scraping operations
+- Secure database connections
 
-## Installation
+## 📋 Description
+A comprehensive web scraping system for business addresses with an integrated graphical interface.
 
-1. **Clone the Repository**:
+## 🚀 Quick Start with DevContainer
+
+### Prerequisites
+- [Docker Desktop](https://www.docker.com/products/docker-desktop)
+- [Visual Studio Code](https://code.visualstudio.com/)
+- [Remote - Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers)
+
+### Initial Setup
+1. Clone the repository:
    ```bash
-   git clone https://github.com/yourusername/web-scraper-project.git
-   cd web-scraper-project
+   git clone <repository-url>
+   cd business-address-scraper
    ```
 
-2. **Set Up a Virtual Environment**:
-   ```bash
-   python3 -m venv venv
-   source venv/bin/activate  # On Windows, use venv\Scripts\activate
-   ```
+2. Open in VS Code and start DevContainer:
+   - Open VS Code in the project directory
+   - Press `F1` or `Ctrl+Shift+P`
+   - Select "Remote-Containers: Reopen in Container"
+   - Wait for container build to complete
 
-3. **Install Required Python Packages**:
-   ```bash
-   pip install -r requirements.txt
-   ```
+### Available Services
+- **Streamlit Application**: http://localhost:8501
+  - Main web interface for the application
+- **PostgreSQL**: localhost:5432
+  - Database: business_scraper
+  - User: postgres
+  - Password: devpassword123
+- **Redis**: localhost:6379
+  - Used for caching and performance optimization
+- **pgAdmin**: http://localhost:5050
+  - Email: admin@admin.com
+  - Password: admin
+  - Web interface for database management
 
-4. **Configure Tesseract Path**:
-   - **Windows**: Ensure the Tesseract executable is in your system's PATH or specify the path in `scraper/captcha_solver.py`:
-     ```python
-     pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-     ```
-
-## Usage
-
-1. **Prepare the Input CSV**:
-   - Create a file named `businesses.csv` with a single column `business_name` containing the names of businesses you want to scrape.
-
-2. **Run the Scraper**:
-   ```bash
-   python run_scraper.py
-   ```
-
-3. **View the Output**:
-   - The scraped data will be saved in `business_data.csv` in the project directory.
-
-## Project Structure
-
+### Project Structure
 ```
-web-scraper-project/
-│
-├── scraper/
-│   ├── spiders/
-│   │   └── business_spider.py
-│   ├── __init__.py
-│   ├── captcha_solver.py
-│   ├── llama_processor.py
-│   ├── pipelines.py
-│   └── settings.py
-│
-├── businesses.csv
-├── run_scraper.py
-├── requirements.txt
-└── README.md
+.
+├── .devcontainer/          # Development environment configuration
+├── app.py                  # Main Streamlit application
+├── scraper/               # Core scraper functionality
+│   ├── spiders/          # Scrapy spider definitions
+│   ├── database.py       # Database operations
+│   └── settings.py       # Configuration settings
+├── tests/                # Test suite
+├── docs/                 # Documentation
+├── scripts/              # Utility scripts
+└── requirements.txt      # Project dependencies
 ```
 
-- **scraper/spiders/business_spider.py**: Contains the Scrapy spider for crawling and scraping data.
-- **scraper/captcha_solver.py**: Handles captcha solving using Tesseract-OCR.
-- **scraper/llama_processor.py**: Integrates the local LLaMA model for query refinement.
-- **scraper/settings.py**: Configures Scrapy settings, including proxy rotation and download delays.
-- **run_scraper.py**: Main script to execute the scraper.
-- **businesses.csv**: Input file containing business names to scrape.
-- **requirements.txt**: Lists all Python dependencies.
+## 💾 Database Schema
 
-## Troubleshooting and Debugging
+The application uses PostgreSQL with the following main tables:
+- businesses: Stores business information
+  - id: Primary key
+  - name: Business name
+  - state: State location
+  - verified: Verification status
+  - violation_type: Type of violation (if any)
+  - created_at: Record creation timestamp
+  - updated_at: Last update timestamp
 
-- **Common Issues**:
-  - **Captcha Solving Failures**: Ensure Tesseract-OCR is correctly installed and configured. Test it separately to confirm it's working.
-  - **Proxy Errors**: Verify that the proxies listed in `scraper/settings.py` are active and correctly formatted.
-  - **Missing Dependencies**: Double-check that all required Python packages are installed by reviewing `requirements.txt`.
+## 🛠️ Development
 
-- **Debugging Tips**:
-  - **Logging**: Implement logging within your scripts to capture detailed information about the scraping process.
-  - **Interactive Debugging**: Use Python's built-in `pdb` module to set breakpoints and inspect variables during execution.
+### Useful Commands
+```bash
+# Run the application
+streamlit run app.py
 
-## Testing
+# Run tests
+pytest
 
-- **Unit Tests**: Develop unit tests for individual functions, especially for captcha solving and data extraction methods.
-- **Integration Tests**: Test the entire scraping workflow with a subset of business names to ensure all components work together seamlessly.
-- **Mocking**: Use libraries like `unittest.mock` to simulate network responses and test how your scraper handles different scenarios.
+# Check test coverage
+pytest --cov=scraper tests/
 
-## Contributing
+# Format code
+black .
 
-We welcome contributions to enhance this project. To contribute:
+# Type checking
+mypy .
 
-1. **Fork the Repository**: Click the "Fork" button at the top right of this page.
-2. **Create a New Branch**: Use a descriptive name for your branch.
-   ```bash
-   git checkout -b feature/your-feature-name
-   ```
-3. **Make Your Changes**: Implement your feature or fix.
-4. **Commit Your Changes**: Write clear and concise commit messages.
-   ```bash
-   git commit -m "Description of your changes"
-   ```
-5. **Push to Your Fork**:
-   ```bash
-   git push origin feature/your-feature-name
-   ```
-6. **Submit a Pull Request**: Navigate to the original repository and submit a pull request from your fork.
+# Run scraper
+python run_scraper.py
+```
 
-## To-Do Checklist
+### Development Workflow
+1. Development environment is automatically configured when opening in DevContainer
+2. VS Code extensions are preconfigured for:
+   - Automatic formatting with Black
+   - Linting with Flake8
+   - Type checking with MyPy
+   - Pre-commit hooks
 
-- [ ] **Enhance Error Handling**: Improve exception handling to make the scraper more robust.
-- [ ] **Implement Advanced Captcha Solving**: Integrate services like 2Captcha for more complex captchas.
-- [ ] **Add More Proxies**: Expand the list of proxies to reduce the risk of IP bans.
-- [ ] **Optimize Data Extraction**: Refine the parsing logic to handle a wider variety of website structures.
-- [ ] **Expand Testing Suite**: Develop more comprehensive tests to cover edge cases and ensure reliability.
-- [ ] **Improve Documentation**: Add detailed explanations of each module and function within the codebase.
+### Database
+- Database is automatically initialized with required tables
+- Indexes and extensions are created during initialization
+- pgAdmin available for visual administration
 
-By following this guide, you should be well-equipped to set up, run, and contribute to the web scraper project. If you encounter any issues or have suggestions for improvements, please feel free to open an issue or submit a pull request. 
+### Cache
+- Redis is used as the default caching system
+- Configuration adjustable in .env file
+- Monitoring available through metrics interface
+
+## 📊 Metrics and Monitoring
+- Performance metrics available in interface
+- Monitoring of:
+  - CPU and memory usage
+  - Database connections
+  - Cache hits/misses
+  - Errors and latencies
+
+## 🔧 Configuration
+
+### Environment Variables
+Required environment variables:
+```env
+# Required
+QWANT_API_KEY=your_qwant_api_key_here    # API key for Qwant search engine
+
+# Database Configuration
+DB_HOST=db                          # Database host
+DB_PORT=5432                        # Database port
+DB_NAME=business_scraper           # Database name
+DB_USER=postgres                    # Database user
+DB_PASSWORD=devpassword123         # Database password
+DB_POOL_SIZE=5                     # Database pool size
+
+# Redis Configuration
+REDIS_HOST=redis                    # Redis host
+REDIS_PORT=6379                     # Redis port
+REDIS_DB=0                         # Redis database number
+
+# Cache Configuration
+CACHE_TYPE=redis                    # Options: redis, filesystem
+CACHE_TTL=3600                     # Cache time-to-live in seconds
+
+# Logging Configuration
+LOG_LEVEL=INFO                     # Logging level
+LOG_FILE=scraper.log               # Logging file
+
+# Scraper Configuration
+SCRAPER_MODE=development           # Scraper mode
+SCRAPER_THREADS=4                   # Number of concurrent scraping threads
+REQUEST_TIMEOUT=30                  # Request timeout in seconds
+MAX_RETRIES=3                      # Maximum number of retry attempts
+
+# Metrics Configuration
+ENABLE_METRICS=true                 # Enable metrics
+METRICS_PORT=8000                   # Metrics port
+```
+
+Choose the appropriate example file and copy it to `.env`:
+```bash
+# For development
+cp .env.example .env
+
+# For production
+cp .env.prod.example .env
+
+# For testing
+cp .env.test.example .env
+```
+
+### Customization
+- Modify `.devcontainer/devcontainer.json` to adjust environment settings
+- Adjust `docker-compose.yml` to modify services
+- Configure additional VS Code extensions
+
+## 🔍 Troubleshooting
+
+### Common Issues
+1. **Database Connection Error**:
+   - Verify PostgreSQL service is running
+   - Check credentials in `.env`
+   - Review logs with `docker-compose logs db`
+
+2. **Redis Connection Error**:
+   - Verify Redis service is running
+   - Check configuration in `.env`
+   - Review logs with `docker-compose logs redis`
+
+3. **DevContainer Issues**:
+   - Rebuild container: "Remote-Containers: Rebuild Container"
+   - Check Docker resources allocation
+   - Review build logs
+
+### Logs
+- Application logs: `./logs/scraper.log`
+- Docker logs: `docker-compose logs`
+- Specific service logs: `docker-compose logs [service]`
+
+## 📝 Contributing
+1. Fork the repository
+2. Create a feature branch: `git checkout -b feature/new-feature`
+3. Commit your changes: `git commit -am 'Add new feature'`
+4. Push to the branch: `git push origin feature/new-feature`
+5. Create a Pull Request
+
+## 📄 License
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details. 

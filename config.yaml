@@ -1,0 +1,153 @@
+# Main configuration file for the web scraper
+
+# Scraper settings
+scraper:
+  mode: production  # Options: development, testing, sandbox, production
+  rate_limit: 5  # Requests per second
+  max_retries: 3
+  chunk_size: 1000
+  user_agent: "Business Address Scraper/1.0"
+  respect_robots_txt: true
+  download_delay: 2
+  concurrent_requests: 1
+
+# Output settings
+output:
+  format: csv  # Options: csv, json
+  directory: data/output
+  filename_pattern: "business_data_{timestamp}.csv"
+  chunk_enabled: true
+  chunk_size: 1000
+  compress_output: true
+
+# Logging settings
+logging:
+  level: INFO  # Options: DEBUG, INFO, WARNING, ERROR, CRITICAL
+  file: logs/scraper.log
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  rotate: true
+  max_size: 10485760  # 10MB
+  backup_count: 5
+  compress: true
+
+# Database settings
+database:
+  enabled: true
+  type: postgresql
+  host: localhost
+  port: 5432
+  name: scraper_db
+  user: ${DB_USER}
+  password: ${DB_PASSWORD}
+  pool_size: 5
+  max_overflow: 10
+  timeout: 30
+
+# Cache settings
+cache:
+  enabled: true
+  type: filesystem  # Options: filesystem, redis, memory
+  directory: .cache
+  expiration: 86400  # 24 hours
+  max_size: 1073741824  # 1GB
+
+# Proxy settings
+proxy:
+  enabled: true
+  rotation: true
+  check_interval: 300  # 5 minutes
+  timeout: 10
+  retry_count: 3
+  blacklist_time: 3600  # 1 hour
+
+# OCR settings
+ocr:
+  enabled: true
+  engine: tesseract
+  language: eng
+  config_path: config/tesseract
+  timeout: 30
+  preprocessing:
+    resize: true
+    max_size: 1920
+    denoise: true
+    threshold: true
+
+# LLaMA settings
+llama:
+  model_path: ${LLAMA_MODEL_PATH}
+  max_tokens: 100
+  temperature: 0.7
+  top_p: 0.9
+  context_size: 2048
+  batch_size: 8
+
+# API settings
+api:
+  qwant:
+    enabled: true
+    api_key: ${QWANT_API_KEY}
+    endpoint: "https://api.qwant.com/v3/search/web"
+    timeout: 10
+    max_results: 10
+
+# Monitoring settings
+monitoring:
+  enabled: true
+  prometheus:
+    enabled: true
+    port: 8000
+  metrics_endpoint: ${METRICS_ENDPOINT}
+  alert_email: ${ALERT_EMAIL}
+  error_threshold: 100
+  stats_interval: 60
+
+# Security settings
+security:
+  ssl_verify: true
+  use_encryption: true
+  encryption_key: ${ENCRYPTION_KEY}
+  allowed_domains:
+    - ny.gov
+    - nyc.gov
+    - yellowpages.com
+    - bbb.org
+    - yelp.com
+    - bloomberg.com
+    - linkedin.com
+    - manta.com
+
+# Performance settings
+performance:
+  max_memory: 1073741824  # 1GB
+  max_cpu_percent: 80
+  timeout: 300  # 5 minutes
+  gc_interval: 3600  # 1 hour
+
+# Error handling
+error_handling:
+  retry_codes:
+    - 429  # Too Many Requests
+    - 500  # Internal Server Error
+    - 502  # Bad Gateway
+    - 503  # Service Unavailable
+    - 504  # Gateway Timeout
+  notification:
+    enabled: true
+    threshold: 100
+    interval: 3600  # 1 hour
+    methods:
+      - email
+      - log
+  fallback:
+    enabled: true
+    max_attempts: 3
+    delay: 60  # 1 minute
+
+# Backup settings
+backup:
+  enabled: true
+  interval: 86400  # 24 hours
+  retention: 7  # days
+  compress: true
+  path: /var/backup/scraper 

@@ -28,42 +28,73 @@ class BusinessDataPipeline:
     CHUNK_SIZE = 1000  # Number of items to process before writing to disk
 
     def __init__(self):
-        self.items: List[BusinessData] = []
+        self.items = []
         self.logger = logging.getLogger(__name__)
+        self.logger.info("Initializing BusinessDataPipeline")
         self.processed_count = 0
+        self.error_count = 0
+        self.skipped_count = 0
         self._ensure_output_dir()
+        self.stats = {
+            'total_items': 0,
+            'valid_items': 0,
+            'invalid_items': 0,
+            'chunks_written': 0,
+            'processing_errors': 0,
+            'validation_errors': 0
+        }
 
     def _ensure_output_dir(self):
         """Ensure the output directory exists"""
         output_dir = 'output'
+        self.logger.debug(f"Checking if output directory exists: {output_dir}")
         if not os.path.exists(output_dir):
+            self.logger.info(f"Creating output directory: {output_dir}")
             os.makedirs(output_dir)
+        else:
+            self.logger.debug("Output directory already exists")
 
-    def process_item(self, item: Dict[str, Any], spider) -> Optional[Dict[str, Any]]:
+    def process_item(self, item, spider):
         """Process each scraped item"""
+        self.stats['total_items'] += 1
         try:
+            self.logger.debug(f"Processing item for business: {item.get('business_name')}")
+            
             # Validate and clean the data
             cleaned_item = self._clean_item(item)
+            if not cleaned_item:
+                self.logger.warning(f"Item cleaning failed for business: {item.get('business_name')}")
+                self.stats['invalid_items'] += 1
+                return None
             
             # Validate New York address
             if not self._validate_ny_address(cleaned_item):
-                self.logger.warning(f"Skipping non-NY address for business: {cleaned_item.business_name}")
+                self.logger.warning(f"Skipping non-NY address for business: {cleaned_item.get('business_name')}")
+                self.skipped_count += 1
+                self.stats['validation_errors'] += 1
                 return None
             
             # Add timestamp
-            cleaned_item.scraped_at = datetime.now().isoformat()
+            cleaned_item['scraped_at'] = datetime.now().isoformat()
             
             # Store the item
             self.items.append(cleaned_item)
             self.processed_count += 1
+            self.stats['valid_items'] += 1
             
             # Write to disk if we've reached the chunk size
             if len(self.items) >= self.CHUNK_SIZE:
+                self.logger.info(f"Chunk size reached ({self.CHUNK_SIZE} items). Writing to disk...")
                 self._write_chunk()
             
-            return asdict(cleaned_item)
+            self.logger.debug(f"Successfully processed item for business: {cleaned_item.get('business_name')}")
+            return cleaned_item
+            
         except Exception as e:
-            self.logger.error(f"Error processing item: {e}")
+            self.logger.error(f"Error processing item: {str(e)}")
+            self.logger.error("Stack trace:", exc_info=True)
+            self.error_count += 1
+            self.stats['processing_errors'] += 1
             return None
 
     def _clean_item(self, item: Dict[str, Any]) -> BusinessData:
@@ -158,52 +189,79 @@ class BusinessDataPipeline:
         return True
 
     def _write_chunk(self):
-        """Write current chunk of items to disk"""
-        if not self.items:
-            return
-
+        """Write current items to a chunk file"""
         try:
-            # Convert items to DataFrame
-            df = pd.DataFrame([asdict(item) for item in self.items])
+            if not self.items:
+                self.logger.debug("No items to write")
+                return
+
+            chunk_num = self.stats['chunks_written'] + 1
+            chunk_file = f'output/chunk_{chunk_num:04d}.csv'
+            self.logger.info(f"Writing {len(self.items)} items to chunk file: {chunk_file}")
             
-            # Generate chunk filename
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            chunk_file = f'output/chunk_{timestamp}_{len(self.items)}.csv'
-            
-            # Save to CSV
+            df = pd.DataFrame(self.items)
             df.to_csv(chunk_file, index=False)
             
-            self.logger.info(f"Saved chunk of {len(self.items)} items to {chunk_file}")
+            self.items = []  # Clear the items list
+            self.stats['chunks_written'] += 1
+            self.logger.debug(f"Successfully wrote chunk file: {chunk_file}")
             
-            # Clear the items list
-            self.items = []
         except Exception as e:
-            self.logger.error(f"Error saving chunk: {e}")
+            self.logger.error(f"Error writing chunk file: {str(e)}")
+            self.logger.error("Stack trace:", exc_info=True)
+            raise StorageError(f"Failed to write chunk file: {str(e)}")
 
     def close_spider(self, spider):
         """Called when the spider is closed"""
         try:
+            self.logger.info("Spider closing. Processing final items...")
+            
             # Write any remaining items
-            self._write_chunk()
+            if self.items:
+                self.logger.info(f"Writing final {len(self.items)} items")
+                self._write_chunk()
             
             # Combine all chunks
             chunk_pattern = 'output/chunk_*.csv'
+            self.logger.info("Combining chunk files...")
+            chunk_files = sorted(os.glob(chunk_pattern))
+            
+            if not chunk_files:
+                self.logger.warning("No chunk files found to combine")
+                return
+            
+            self.logger.debug(f"Found {len(chunk_files)} chunk files to combine")
             all_chunks = pd.concat(
-                [pd.read_csv(f) for f in sorted(os.glob(chunk_pattern))],
+                [pd.read_csv(f) for f in chunk_files],
                 ignore_index=True
             )
             
             # Save final output
             output_file = os.getenv('CSV_OUTPUT_FILE', 'business_data.csv')
+            self.logger.info(f"Saving combined data to {output_file}")
             all_chunks.to_csv(output_file, index=False)
             
             # Clean up chunks
-            for chunk_file in os.glob(chunk_pattern):
+            self.logger.debug("Cleaning up chunk files...")
+            for chunk_file in chunk_files:
                 os.remove(chunk_file)
             
-            self.logger.info(f"Saved {self.processed_count} total items to {output_file}")
+            # Log final statistics
+            self.logger.info("Pipeline processing completed. Final statistics:")
+            self.logger.info(f"Total items processed: {self.stats['total_items']}")
+            self.logger.info(f"Valid items: {self.stats['valid_items']}")
+            self.logger.info(f"Invalid items: {self.stats['invalid_items']}")
+            self.logger.info(f"Processing errors: {self.stats['processing_errors']}")
+            self.logger.info(f"Validation errors: {self.stats['validation_errors']}")
+            self.logger.info(f"Chunks written: {self.stats['chunks_written']}")
+            self.logger.info(f"Total items saved: {self.processed_count}")
+            self.logger.info(f"Items skipped: {self.skipped_count}")
+            self.logger.info(f"Errors encountered: {self.error_count}")
+            
         except Exception as e:
-            self.logger.error(f"Error in spider cleanup: {e}")
+            self.logger.error(f"Error in spider cleanup: {str(e)}")
+            self.logger.error("Stack trace:", exc_info=True)
+            raise StorageError(f"Failed to complete pipeline cleanup: {str(e)}")
 
 class DuplicateFilterPipeline:
     """Pipeline to filter out duplicate business entries"""

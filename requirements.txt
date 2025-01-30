@@ -1,23 +1,49 @@
+# Core Dependencies
 scrapy==2.11.0
 selenium==4.16.0
 pandas==2.1.4
-requests==2.31.0
-fake-useragent==1.4.0
-python-dotenv==1.0.0
-undetected-chromedriver==3.5.4
-beautifulsoup4==4.12.2
-numpy==1.26.3
-validators==0.22.0
-retry==0.9.2
 pytesseract==0.3.10
-Pillow==10.1.0
-llama-cpp-python==0.2.11
-transformers==4.35.2
-torch==2.1.1
+python-dotenv==1.0.1
+requests==2.31.0
 tldextract==5.1.1
-urllib3==2.0.7
-certifi==2023.11.17
-charset-normalizer==3.3.2
+validators==0.22.0
+
+# Database
+psycopg2-binary==2.9.9
+SQLAlchemy==2.0.25
+redis==5.0.1
+
+# Image Processing
+Pillow==10.1.0
+opencv-python==4.9.0.80
+
+# Machine Learning
+torch==2.1.2
+transformers==4.36.2
+
+# UI Dependencies
+streamlit==1.29.0
+plotly==5.18.0
+altair==5.2.0
+streamlit-option-menu==0.3.6
+streamlit-aggrid==0.3.4
+
+# Utilities
+python-dateutil==2.8.2
+pytz==2023.3.post1
+pyyaml==6.0.1
 cryptography==41.0.7
-pyOpenSSL==23.3.0
-service-identity==23.1.0 
+
+# Monitoring & Logging
+prometheus-client==0.19.0
+sentry-sdk==1.39.1
+diskcache==5.6.3
+psutil==5.9.8
+beautifulsoup4==4.12.3
+lxml==5.1.0
+pytest==8.0.0
+pytest-cov==4.1.0
+black==24.1.1
+flake8==7.0.0
+mypy==1.8.0
+pydantic>=2.0.0 
