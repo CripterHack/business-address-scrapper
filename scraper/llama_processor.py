@@ -1,22 +1,36 @@
 import logging
-from llama_cpp import Llama
+from typing import List, Dict, Optional
 import os
-from typing import List, Dict
-import json
+
+try:
+    from llama_cpp import Llama
+    LLAMA_AVAILABLE = True
+except ImportError:
+    LLAMA_AVAILABLE = False
+
 
 class LlamaProcessor:
-    def __init__(self, model_path: str = None):
+    def __init__(self, model_path: Optional[str] = None):
         self.logger = logging.getLogger(__name__)
         self.model = self._load_model(model_path)
+        
+        if self.model:
+            self.logger.info("LlamaProcessor initialized with LLaMA model")
+        else:
+            self.logger.info("LlamaProcessor initialized in fallback mode")
 
-    def _load_model(self, model_path: str = None):
-        """Load the LLaMA model"""
+    def _load_model(self, model_path: Optional[str] = None) -> Optional[Llama]:
+        """Try to load the LLaMA model, return None if not possible"""
+        if not LLAMA_AVAILABLE:
+            self.logger.warning("llama-cpp-python not available, using fallback mode")
+            return None
+
         try:
             if not model_path:
                 model_path = os.getenv('LLAMA_MODEL_PATH')
             
             if not model_path or not os.path.exists(model_path):
-                self.logger.warning("LLaMA model not found, using basic query processing")
+                self.logger.warning("LLaMA model path not found, using fallback mode")
                 return None
             
             return Llama(
@@ -29,7 +43,7 @@ class LlamaProcessor:
             return None
 
     def enhance_query(self, business_name: str) -> str:
-        """Enhance the search query using LLaMA model"""
+        """Enhance the search query using LLaMA model if available, otherwise fallback"""
         if not self.model:
             return self._fallback_query_enhancement(business_name)
 
@@ -43,7 +57,7 @@ class LlamaProcessor:
             )
             
             enhanced_query = self._parse_llama_response(response['choices'][0]['text'])
-            self.logger.info(f"Enhanced query: {enhanced_query}")
+            self.logger.info(f"Enhanced query with LLaMA: {enhanced_query}")
             return enhanced_query
         except Exception as e:
             self.logger.error(f"Error enhancing query with LLaMA: {e}")
@@ -73,19 +87,20 @@ class LlamaProcessor:
     def _fallback_query_enhancement(self, business_name: str) -> str:
         """Fallback method when LLaMA model is not available"""
         # Add relevant keywords to improve search results
-        enhanced_query = f"{business_name} business address location New York NY official records"
+        keywords = "business address location New York NY official records"
+        enhanced_query = f"{business_name} {keywords}"
         self.logger.info(f"Using fallback query enhancement: {enhanced_query}")
         return enhanced_query
 
     def analyze_search_results(self, results: List[Dict]) -> List[Dict]:
-        """Analyze search results to identify most relevant ones"""
+        """Analyze search results using LLaMA model if available, otherwise use basic analysis"""
         if not self.model:
-            return results
+            return self._fallback_analyze_results(results)
 
         try:
             scored_results = []
             for result in results:
-                relevance_score = self._calculate_relevance(result)
+                relevance_score = self._calculate_llama_relevance(result)
                 scored_results.append({
                     **result,
                     'relevance_score': relevance_score
@@ -94,11 +109,11 @@ class LlamaProcessor:
             # Sort by relevance score
             return sorted(scored_results, key=lambda x: x['relevance_score'], reverse=True)
         except Exception as e:
-            self.logger.error(f"Error analyzing search results: {e}")
-            return results
+            self.logger.error(f"Error analyzing results with LLaMA: {e}")
+            return self._fallback_analyze_results(results)
 
-    def _calculate_relevance(self, result: Dict) -> float:
-        """Calculate relevance score for a search result"""
+    def _calculate_llama_relevance(self, result: Dict) -> float:
+        """Calculate relevance score using LLaMA model"""
         try:
             prompt = f"""
             Analyze this search result and rate its relevance (0-1) for finding business information:
@@ -120,5 +135,38 @@ class LlamaProcessor:
                 return min(max(score, 0), 1)  # Ensure score is between 0 and 1
             except ValueError:
                 return 0.5
+        except Exception:
+            return 0.5
+
+    def _fallback_analyze_results(self, results: List[Dict]) -> List[Dict]:
+        """Basic analysis of search results when LLaMA is not available"""
+        try:
+            scored_results = []
+            keywords = ['address', 'location', 'business', 'new york', 'ny', 'official']
+            
+            for result in results:
+                score = self._calculate_basic_relevance(result, keywords)
+                scored_results.append({
+                    **result,
+                    'relevance_score': score
+                })
+            
+            return sorted(scored_results, key=lambda x: x['relevance_score'], reverse=True)
+        except Exception as e:
+            self.logger.error(f"Error in fallback analysis: {e}")
+            return results
+
+    def _calculate_basic_relevance(self, result: Dict, keywords: List[str]) -> float:
+        """Calculate basic relevance score based on keyword presence"""
+        try:
+            text = f"{result.get('title', '')} {result.get('description', '')}".lower()
+            
+            # Count keyword matches
+            matches = sum(1 for keyword in keywords if keyword in text)
+            
+            # Calculate score (0-1)
+            score = min(matches / len(keywords), 1.0)
+            
+            return score
         except Exception:
             return 0.5 

@@ -4,7 +4,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any, NoReturn
 from contextlib import contextmanager
 
 from prometheus_client import Counter, Gauge, Histogram, start_http_server, CollectorRegistry
@@ -18,90 +18,115 @@ class ScraperMetrics:
     """Metrics collector for the scraper."""
     
     registry: CollectorRegistry = field(default_factory=CollectorRegistry)
+    requests_total: Counter = field(init=False)
+    request_duration_seconds: Histogram = field(init=False)
+    items_scraped: Counter = field(init=False)
+    items_processed: Counter = field(init=False)
+    errors_total: Counter = field(init=False)
+    active_requests: Gauge = field(init=False)
+    memory_usage_bytes: Gauge = field(init=False)
+    cpu_usage_percent: Gauge = field(init=False)
+    db_connections: Gauge = field(init=False)
+    db_query_duration_seconds: Histogram = field(init=False)
+    cache_hits: Counter = field(init=False)
+    cache_misses: Counter = field(init=False)
     
-    # Prometheus metrics with registry
-    requests_total: Counter = field(default_factory=lambda: Counter(
-        'scraper_requests_total',
-        'Total number of requests made',
-        ['method', 'status'],
-        registry=registry
-    ))
+    # Valores en memoria para las métricas
+    _values: Dict[str, float] = field(default_factory=lambda: {
+        'requests_total': 0,
+        'active_requests': 0,
+        'items_scraped': 0,
+        'items_processed': 0,
+        'errors_total': 0,
+        'memory_usage_bytes': 0,
+        'cpu_usage_percent': 0,
+        'db_connections': 0,
+        'cache_hits': 0,
+        'cache_misses': 0
+    })
     
-    request_duration_seconds: Histogram = field(default_factory=lambda: Histogram(
-        'scraper_request_duration_seconds',
-        'Request duration in seconds',
-        ['method']
-    ))
-    
-    items_scraped: Counter = field(default_factory=lambda: Counter(
-        'scraper_items_scraped_total',
-        'Total number of items scraped',
-        registry=registry
-    ))
-    
-    items_processed: Counter = field(default_factory=lambda: Counter(
-        'scraper_items_processed_total',
-        'Total number of items processed',
-        registry=registry
-    ))
-    
-    errors_total: Counter = field(default_factory=lambda: Counter(
-        'scraper_errors_total',
-        'Total number of errors',
-        ['type'],
-        registry=registry
-    ))
-    
-    active_requests: Gauge = field(default_factory=lambda: Gauge(
-        'scraper_active_requests',
-        'Number of requests currently being processed',
-        registry=registry
-    ))
-    
-    # Performance metrics
-    memory_usage_bytes: Gauge = field(default_factory=lambda: Gauge(
-        'scraper_memory_usage_bytes',
-        'Current memory usage in bytes',
-        registry=registry
-    ))
-    
-    cpu_usage_percent: Gauge = field(default_factory=lambda: Gauge(
-        'scraper_cpu_usage_percent',
-        'Current CPU usage percentage',
-        registry=registry
-    ))
-    
-    # Database metrics
-    db_connections: Gauge = field(default_factory=lambda: Gauge(
-        'scraper_db_connections',
-        'Number of active database connections',
-        registry=registry
-    ))
-    
-    db_query_duration_seconds: Histogram = field(default_factory=lambda: Histogram(
-        'scraper_db_query_duration_seconds',
-        'Database query duration in seconds',
-        ['query_type'],
-        registry=registry
-    ))
-    
-    # Cache metrics
-    cache_hits: Counter = field(default_factory=lambda: Counter(
-        'scraper_cache_hits_total',
-        'Total number of cache hits',
-        registry=registry
-    ))
-    
-    cache_misses: Counter = field(default_factory=lambda: Counter(
-        'scraper_cache_misses_total',
-        'Total number of cache misses',
-        registry=registry
-    ))
-    
-    def __post_init__(self):
-        """Initialize performance monitoring."""
+    def __post_init__(self) -> None:
+        """Initialize metrics with registry."""
+        # Initialize Prometheus metrics
+        self.requests_total = Counter(
+            'scraper_requests_total',
+            'Total number of requests made',
+            ['method', 'status'],
+            registry=self.registry
+        )
+        
+        self.request_duration_seconds = Histogram(
+            'scraper_request_duration_seconds',
+            'Request duration in seconds',
+            ['method'],
+            registry=self.registry
+        )
+        
+        self.items_scraped = Counter(
+            'scraper_items_scraped_total',
+            'Total number of items scraped',
+            registry=self.registry
+        )
+        
+        self.items_processed = Counter(
+            'scraper_items_processed_total',
+            'Total number of items processed',
+            registry=self.registry
+        )
+        
+        self.errors_total = Counter(
+            'scraper_errors_total',
+            'Total number of errors',
+            ['type'],
+            registry=self.registry
+        )
+        
+        self.active_requests = Gauge(
+            'scraper_active_requests',
+            'Number of requests currently being processed',
+            registry=self.registry
+        )
+        
+        self.memory_usage_bytes = Gauge(
+            'scraper_memory_usage_bytes',
+            'Current memory usage in bytes',
+            registry=self.registry
+        )
+        
+        self.cpu_usage_percent = Gauge(
+            'scraper_cpu_usage_percent',
+            'Current CPU usage percentage',
+            registry=self.registry
+        )
+        
+        self.db_connections = Gauge(
+            'scraper_db_connections',
+            'Number of active database connections',
+            registry=self.registry
+        )
+        
+        self.db_query_duration_seconds = Histogram(
+            'scraper_db_query_duration_seconds',
+            'Database query duration in seconds',
+            ['query_type'],
+            registry=self.registry
+        )
+        
+        self.cache_hits = Counter(
+            'scraper_cache_hits_total',
+            'Total number of cache hits',
+            registry=self.registry
+        )
+        
+        self.cache_misses = Counter(
+            'scraper_cache_misses_total',
+            'Total number of cache misses',
+            registry=self.registry
+        )
+        
+        # Initialize performance monitoring
         try:
-            import psutil
+            import psutil  # type: ignore
             self.process = psutil.Process()
         except ImportError:
             logger.warning("psutil not installed, performance monitoring disabled")
@@ -110,22 +135,38 @@ class ScraperMetrics:
         # Initialize counters at 0
         self._reset_counters()
 
-    def _reset_counters(self):
+    def _reset_counters(self) -> None:
         """Reset all counters to 0."""
         try:
-            self.items_scraped._value.clear()
-            self.items_processed._value.clear()
-            self.errors_total._value.clear()
-            self.cache_hits._value.clear()
-            self.cache_misses._value.clear()
+            for key in self._values:
+                self._values[key] = 0
         except Exception as e:
             logger.error(f"Failed to reset counters: {e}")
 
+    def inc_counter(self, name: str, amount: float = 1) -> None:
+        """Increment a counter."""
+        self._values[name] += amount
+
+    def dec_counter(self, name: str, amount: float = 1) -> None:
+        """Decrement a counter."""
+        self._values[name] -= amount
+
+    def set_gauge(self, name: str, value: float) -> None:
+        """Set a gauge value."""
+        self._values[name] = value
+
+    def get_value(self, name: str) -> float:
+        """Get a metric value."""
+        return self._values.get(name, 0)
+
     @contextmanager
-    def _safe_counter_increment(self, counter: Counter, labels: Optional[Dict] = None):
+    def _safe_counter_increment(self, counter: Counter, labels: Optional[Dict[str, Any]] = None) -> Any:
         """Safely increment a counter with overflow protection."""
         try:
-            current_value = sum(counter._value.values())
+            current_value = sum(
+                float(metric.get('_value', 0))
+                for metric in counter._metrics.values()
+            )
             if current_value < MAX_COUNTER_VALUE:
                 if labels:
                     counter.labels(**labels).inc()
@@ -133,28 +174,34 @@ class ScraperMetrics:
                     counter.inc()
             else:
                 logger.warning(f"Counter {counter._name} reached maximum value, resetting")
-                counter._value.clear()
+                counter._metrics.clear()
         except Exception as e:
             logger.error(f"Failed to increment counter: {e}")
         yield
 
-    def start_prometheus_server(self, port: int = 8000):
+    def start_prometheus_server(self, port: int = 8000) -> None:
         """Start Prometheus metrics server with error handling."""
-        try:
-            start_http_server(port, registry=self.registry)
-            logger.info(f"Prometheus metrics server started on port {port}")
-        except OSError as e:
-            if e.errno == 98:  # Address already in use
-                logger.warning(f"Port {port} already in use, trying alternative")
-                try:
-                    start_http_server(port + 1, registry=self.registry)
-                    logger.info(f"Prometheus metrics server started on port {port + 1}")
-                except Exception as e2:
-                    logger.error(f"Failed to start Prometheus server on alternative port: {e2}")
-            else:
+        max_attempts = 10
+        current_port = port
+        
+        for attempt in range(max_attempts):
+            try:
+                start_http_server(current_port, registry=self.registry)
+                logger.info(f"Prometheus metrics server started on port {current_port}")
+                return
+            except OSError as e:
+                if e.errno == 98:  # Address already in use
+                    current_port = port + attempt + 1
+                    logger.warning(f"Port {current_port - 1} in use, trying port {current_port}")
+                    continue
+                else:
+                    logger.error(f"Failed to start Prometheus server: {e}")
+                    return
+            except Exception as e:
                 logger.error(f"Failed to start Prometheus server: {e}")
-        except Exception as e:
-            logger.error(f"Failed to start Prometheus server: {e}")
+                return
+        
+        logger.error(f"Failed to find available port after {max_attempts} attempts")
 
     def track_request(self, method: str):
         """Context manager to track request metrics with error handling."""
@@ -168,7 +215,7 @@ class ScraperMetrics:
             def __enter__(self):
                 try:
                     self.start_time = time.time()
-                    self.metrics.active_requests.inc()
+                    self.metrics.inc_counter('active_requests')
                 except Exception as e:
                     logger.error(f"Failed to start request tracking: {e}")
                 return self
@@ -180,20 +227,11 @@ class ScraperMetrics:
                         method=self.method
                     ).observe(duration)
                     
-                    self.metrics.active_requests.dec()
+                    self.metrics.dec_counter('active_requests')
+                    self.metrics.inc_counter('requests_total')
                     
-                    with self.metrics._safe_counter_increment(
-                        self.metrics.requests_total,
-                        {'method': self.method, 'status': 'error' if exc_type else 'success'}
-                    ):
-                        pass
-                        
                     if exc_type:
-                        with self.metrics._safe_counter_increment(
-                            self.metrics.errors_total,
-                            {'type': exc_type.__name__}
-                        ):
-                            pass
+                        self.metrics.inc_counter('errors_total')
                 except Exception as e:
                     logger.error(f"Failed to complete request tracking: {e}")
 
@@ -276,12 +314,12 @@ class ScraperMetrics:
 class MetricsReport:
     """Report of current metrics."""
     timestamp: datetime
-    requests: Dict[str, int]
-    errors: Dict[str, int]
-    items: Dict[str, int]
+    requests: Dict[str, float]
+    errors: Dict[str, float]
+    items: Dict[str, float]
     performance: Dict[str, float]
     database: Dict[str, float]
-    cache: Dict[str, int]
+    cache: Dict[str, float]
 
 class MetricsManager:
     """Manager for scraper metrics."""
@@ -298,27 +336,26 @@ class MetricsManager:
         return MetricsReport(
             timestamp=datetime.now(),
             requests={
-                'total': sum(self.metrics.requests_total._value.values()),
-                'active': self.metrics.active_requests._value
+                'total': self.metrics.get_value('requests_total'),
+                'active': self.metrics.get_value('active_requests')
             },
             errors={
-                label[0]: value
-                for label, value in self.metrics.errors_total._value.items()
+                'total': self.metrics.get_value('errors_total')
             },
             items={
-                'scraped': self.metrics.items_scraped._value,
-                'processed': self.metrics.items_processed._value
+                'scraped': self.metrics.get_value('items_scraped'),
+                'processed': self.metrics.get_value('items_processed')
             },
             performance={
-                'memory_mb': self.metrics.memory_usage_bytes._value / 1024 / 1024,
-                'cpu_percent': self.metrics.cpu_usage_percent._value
+                'memory_mb': self.metrics.get_value('memory_usage_bytes') / 1024 / 1024,
+                'cpu_percent': self.metrics.get_value('cpu_usage_percent')
             },
             database={
-                'connections': self.metrics.db_connections._value
+                'connections': self.metrics.get_value('db_connections')
             },
             cache={
-                'hits': self.metrics.cache_hits._value,
-                'misses': self.metrics.cache_misses._value
+                'hits': self.metrics.get_value('cache_hits'),
+                'misses': self.metrics.get_value('cache_misses')
             }
         )
 

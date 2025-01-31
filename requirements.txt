@@ -2,6 +2,7 @@
 scrapy==2.11.0
 selenium==4.16.0
 pandas==2.1.4
+openpyxl==3.1.2
 pytesseract==0.3.10
 python-dotenv==1.0.1
 requests==2.31.0
@@ -20,6 +21,7 @@ opencv-python==4.9.0.80
 # Machine Learning
 torch==2.1.2
 transformers==4.36.2
+llama-cpp-python==0.2.56
 
 # UI Dependencies
 streamlit==1.29.0
@@ -33,6 +35,7 @@ python-dateutil==2.8.2
 pytz==2023.3.post1
 pyyaml==6.0.1
 cryptography==41.0.7
+retry==0.9.2
 
 # Monitoring & Logging
 prometheus-client==0.19.0
@@ -46,4 +49,5 @@ pytest-cov==4.1.0
 black==24.1.1
 flake8==7.0.0
 mypy==1.8.0
-pydantic>=2.0.0 
+pydantic>=2.0.0
+duckduckgo-search>=4.1.1 

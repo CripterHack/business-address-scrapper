@@ -1,13 +1,26 @@
 import scrapy
 import json
 import pandas as pd
-import requests
-from urllib.parse import quote, urlparse
 from datetime import datetime
 from retry import retry
 import validators
 import tldextract
-from scraper.settings import QWANT_API_URL, QWANT_API_KEY, NY_STATE_CODE
+from duckduckgo_search import DDGS
+import os
+from pathlib import Path
+from typing import List, Dict, Any, Optional
+
+from scraper.settings import (
+    NY_STATE_CODE,
+    DUCKDUCKGO_REGION,
+    DUCKDUCKGO_SAFESEARCH,
+    DUCKDUCKGO_TIMEOUT,
+    DUCKDUCKGO_MAX_RESULTS,
+    DUCKDUCKGO_BACKEND,
+    CSV_OUTPUT_FILE,
+    INPUT_FILE,
+    TEMP_INPUT_FILE
+)
 from scraper.llama_processor import LlamaProcessor
 
 class BusinessSpider(scrapy.Spider):
@@ -15,13 +28,18 @@ class BusinessSpider(scrapy.Spider):
     
     def __init__(self, *args, **kwargs):
         super(BusinessSpider, self).__init__(*args, **kwargs)
-        self.logger.info("Initializing BusinessSpider")
-        self.businesses = self._load_businesses()
-        self.logger.info(f"Loaded {len(self.businesses)} businesses to process")
-        self.llama_processor = LlamaProcessor()
-        self.logger.info("LLaMA processor initialized")
-        self.allowed_domains = self._load_allowed_domains()
-        self.logger.info(f"Loaded {len(self.allowed_domains)} allowed domains")
+        self.setup_logging()
+        self.initialize_stats()
+        self.setup_files()
+        self.initialize_components()
+
+    def setup_logging(self) -> None:
+        """Configure spider-specific logging"""
+        self.logger.setLevel('DEBUG')
+        self.logger.info("Initializing BusinessSpider with enhanced logging")
+
+    def initialize_stats(self) -> None:
+        """Initialize statistics tracking"""
         self.stats = {
             'processed_businesses': 0,
             'successful_searches': 0,
@@ -29,45 +47,90 @@ class BusinessSpider(scrapy.Spider):
             'valid_urls': 0,
             'invalid_urls': 0,
             'successful_scrapes': 0,
-            'failed_scrapes': 0
+            'failed_scrapes': 0,
+            'start_time': datetime.now().isoformat(),
+            'businesses_total': 0,
+            'businesses_remaining': 0
         }
+        self.logger.info("Statistics tracking initialized")
+
+    def setup_files(self) -> None:
+        """Setup input and output file paths"""
+        # Verificar y crear directorios necesarios
+        output_dir = os.path.dirname(CSV_OUTPUT_FILE)
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
         
-    def _load_businesses(self):
+        self.output_file = CSV_OUTPUT_FILE
+        
+        # Para archivos subidos vía web, usamos el archivo temporal
+        self.input_file = TEMP_INPUT_FILE
+        if not os.path.exists(self.input_file):
+            self.logger.warning(f"No input file found at {self.input_file}. Waiting for file upload...")
+        
+        self.logger.info(f"Output file path: {self.output_file}")
+
+    def initialize_components(self) -> None:
+        """Initialize spider components"""
+        self.businesses = self._load_businesses()
+        self.logger.info(f"Loaded {len(self.businesses)} businesses to process")
+        
+        self.llama_processor = LlamaProcessor()
+        self.logger.info("LLaMA processor initialized")
+        
+        self.allowed_domains = self._load_allowed_domains()
+        self.logger.info(f"Loaded {len(self.allowed_domains)} allowed domains")
+        
+        self.ddgs = DDGS()
+        self.logger.info("DuckDuckGo search initialized")
+
+    def _load_businesses(self) -> List[str]:
         """Load businesses from CSV file"""
         try:
-            self.logger.debug("Attempting to load businesses from CSV")
-            df = pd.read_csv('businesses.csv')
+            if not os.path.exists(self.input_file):
+                self.logger.error("No input file available. Please upload a CSV file through the web interface.")
+                return []
+            
+            self.logger.debug(f"Loading businesses from {self.input_file}")
+            df = pd.read_csv(self.input_file)
+            
+            if 'business_name' not in df.columns:
+                self.logger.error("CSV file must contain 'business_name' column")
+                return []
+            
             businesses = df['business_name'].tolist()
+            self.stats['businesses_total'] = len(businesses)
+            self.stats['businesses_remaining'] = len(businesses)
+            
             self.logger.info(f"Successfully loaded {len(businesses)} businesses from CSV")
             return businesses
+            
         except Exception as e:
             self.logger.error(f"Error loading businesses: {str(e)}")
             self.logger.error("Stack trace:", exc_info=True)
             return []
 
-    def _load_allowed_domains(self):
+    def _load_allowed_domains(self) -> List[str]:
         """Load list of allowed domains for scraping"""
-        return [
+        domains = [
             'ny.gov', 'nyc.gov', 'yellowpages.com', 'bbb.org',
             'yelp.com', 'bloomberg.com', 'linkedin.com', 'manta.com'
         ]
+        self.logger.debug(f"Loaded allowed domains: {domains}")
+        return domains
 
-    def _is_valid_url(self, url):
+    def _is_valid_url(self, url: str) -> bool:
         """Validate URL and domain"""
         try:
             self.logger.debug(f"Validating URL: {url}")
             
-            # Basic URL validation
             if not validators.url(url):
                 self.logger.debug(f"Invalid URL format: {url}")
                 self.stats['invalid_urls'] += 1
                 return False
             
-            # Extract domain
             ext = tldextract.extract(url)
             domain = f"{ext.domain}.{ext.suffix}"
             
-            # Check if domain is allowed
             is_allowed = any(allowed in domain for allowed in self.allowed_domains)
             if is_allowed:
                 self.logger.debug(f"Valid domain found: {domain}")
@@ -77,52 +140,57 @@ class BusinessSpider(scrapy.Spider):
                 self.stats['invalid_urls'] += 1
             
             return is_allowed
+            
         except Exception as e:
             self.logger.error(f"Error validating URL {url}: {str(e)}")
             self.stats['invalid_urls'] += 1
             return False
 
     @retry(tries=3, delay=2)
-    def _qwant_search(self, business_name):
-        """Perform Qwant API search with retry mechanism"""
+    def _duckduckgo_search(self, business_name: str) -> Dict[str, Any]:
+        """Perform DuckDuckGo search with retry mechanism"""
         try:
-            self.logger.info(f"Starting Qwant search for business: {business_name}")
+            self.logger.info(f"Starting DuckDuckGo search for business: {business_name}")
             
-            # Enhance query using LLaMA
             enhanced_query = self.llama_processor.enhance_query(business_name)
             self.logger.debug(f"Enhanced query: {enhanced_query}")
             
-            headers = {
-                'X-API-Key': QWANT_API_KEY,
-                'Accept': 'application/json'
-            }
-            params = {
-                'q': enhanced_query,
-                'count': 10,
-                'locale': 'en_US',
-                't': 'web'
-            }
+            results = list(self.ddgs.text(
+                enhanced_query,
+                region=DUCKDUCKGO_REGION,
+                safesearch=DUCKDUCKGO_SAFESEARCH,
+                timelimit="y1",
+                max_results=DUCKDUCKGO_MAX_RESULTS,
+                backend=DUCKDUCKGO_BACKEND
+            ))
             
-            self.logger.debug(f"Making API request to Qwant with params: {params}")
-            response = requests.get(
-                QWANT_API_URL,
-                headers=headers,
-                params=params,
-                timeout=30
-            )
-            response.raise_for_status()
-            
-            data = response.json()
-            self.logger.info(f"Successfully retrieved {len(data.get('data', {}).get('result', {}).get('items', []))} results")
+            self.logger.info(f"Successfully retrieved {len(results)} results")
             self.stats['successful_searches'] += 1
-            return data
             
-        except requests.Timeout:
-            self.logger.error(f"Timeout while searching for {business_name}")
-            self.stats['failed_searches'] += 1
-            raise
-        except requests.RequestException as e:
-            self.logger.error(f"Error in Qwant search for {business_name}: {str(e)}")
+            # Log the first result to debug the structure
+            if results:
+                self.logger.debug(f"First result structure: {results[0]}")
+            
+            formatted_results = {
+                'data': {
+                    'result': {
+                        'items': [
+                            {
+                                'url': result.get('link', result.get('url', '')),  # Try both 'link' and 'url'
+                                'title': result.get('title', ''),
+                                'description': result.get('body', result.get('snippet', ''))  # Try both 'body' and 'snippet'
+                            }
+                            for result in results
+                            if result.get('link') or result.get('url')  # Only include results with a valid URL
+                        ]
+                    }
+                }
+            }
+            
+            return formatted_results
+            
+        except Exception as e:
+            self.logger.error(f"Error in DuckDuckGo search for {business_name}: {str(e)}")
             self.stats['failed_searches'] += 1
             raise
 
@@ -134,10 +202,9 @@ class BusinessSpider(scrapy.Spider):
         for index, business in enumerate(self.businesses, 1):
             try:
                 self.logger.info(f"Processing business {index}/{total_businesses}: {business}")
-                search_results = self._qwant_search(business)
+                search_results = self._duckduckgo_search(business)
                 
                 if 'data' in search_results and 'result' in search_results['data']:
-                    # Use LLaMA to analyze and score results
                     results = self.llama_processor.analyze_search_results(
                         search_results['data']['result']['items']
                     )
@@ -158,12 +225,13 @@ class BusinessSpider(scrapy.Spider):
                                     'relevance_score': result.get('relevance_score', 0),
                                     'dont_redirect': True,
                                     'handle_httpstatus_list': [404, 403],
-                                    'download_timeout': 30
+                                    'download_timeout': DUCKDUCKGO_TIMEOUT
                                 },
                                 dont_filter=False
                             )
                     
                     self.logger.info(f"Generated {valid_urls} requests for business: {business}")
+                    self.stats['businesses_remaining'] -= 1
                 
                 self.stats['processed_businesses'] += 1
                 
@@ -266,8 +334,20 @@ class BusinessSpider(scrapy.Spider):
             except ValueError:
                 return None 
 
-    def closed(self, reason):
+    def closed(self, reason: str):
         """Called when spider is closed"""
+        self.stats['end_time'] = datetime.now().isoformat()
         self.logger.info("Spider closing. Final statistics:")
         for stat, value in self.stats.items():
-            self.logger.info(f"{stat}: {value}") 
+            self.logger.info(f"{stat}: {value}")
+        
+        # Guardar estadísticas en un archivo
+        try:
+            stats_file = f"stats_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            Path('stats').mkdir(parents=True, exist_ok=True)
+            with open(f"stats/{stats_file}", 'w', encoding='utf-8') as f:
+                import json
+                json.dump(self.stats, f, indent=2)
+            self.logger.info(f"Statistics saved to stats/{stats_file}")
+        except Exception as e:
+            self.logger.error(f"Error saving statistics: {str(e)}") 

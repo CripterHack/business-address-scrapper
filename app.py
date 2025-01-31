@@ -91,44 +91,44 @@ def main():
     # Barra lateral con menú de navegación
     with st.sidebar:
         selected = option_menu(
-            "Menu Principal",
-            ["Dashboard", "Búsqueda", "Gestión de Datos", "Configuración", "Métricas"],
+            "Main Menu",
+            ["Dashboard", "Search", "Data Management", "Settings", "Metrics"],
             icons=['house', 'search', 'database', 'gear', 'graph-up'],
             menu_icon="cast",
             default_index=0
         )
         
         st.sidebar.markdown("---")
-        st.sidebar.markdown("### Estado del Sistema")
+        st.sidebar.markdown("### System Status")
         
-        # Mostrar estado de conexiones
+        # Show connection status
         db = get_database()
         metrics = get_metrics()
         cache = get_cache()
         
         try:
             db.execute("SELECT 1")
-            st.sidebar.success("Base de datos: Conectada")
+            st.sidebar.success("Database: Connected")
         except Exception as e:
-            st.sidebar.error("Base de datos: Error de conexión")
+            st.sidebar.error("Database: Connection error")
         
         if os.getenv('CACHE_TYPE') == 'redis':
             try:
                 cache.backend.client.ping()
-                st.sidebar.success("Redis: Conectado")
+                st.sidebar.success("Redis: Connected")
             except:
-                st.sidebar.error("Redis: Error de conexión")
+                st.sidebar.error("Redis: Connection error")
 
     # Contenido principal basado en la selección
     if selected == "Dashboard":
         show_dashboard()
-    elif selected == "Búsqueda":
+    elif selected == "Search":
         show_search()
-    elif selected == "Gestión de Datos":
+    elif selected == "Data Management":
         show_data_management()
-    elif selected == "Configuración":
+    elif selected == "Settings":
         show_configuration()
-    elif selected == "Métricas":
+    elif selected == "Metrics":
         show_metrics()
 
 def show_dashboard():
@@ -143,7 +143,7 @@ def show_dashboard():
         metrics = get_metrics()
         
         # Cache los resultados de las consultas frecuentes
-        @st.cache_data(ttl=300)  # Cache por 5 minutos
+        @st.cache_data(ttl=300)  # Cache for 5 minutes
         def get_dashboard_metrics():
             return {
                 'total': len(db.fetch_all("SELECT id FROM businesses")),
@@ -158,13 +158,13 @@ def show_dashboard():
         metrics_data = get_dashboard_metrics()
         
         with col1:
-            st.metric("Total Negocios", metrics_data['total'])
+            st.metric("Total Businesses", metrics_data['total'])
         with col2:
-            st.metric("Negocios Verificados", metrics_data['verified'])
+            st.metric("Verified Businesses", metrics_data['verified'])
         with col3:
-            st.metric("Estados Cubiertos", metrics_data['states'])
+            st.metric("Covered States", metrics_data['states'])
         with col4:
-            st.metric("Añadidos (7 días)", metrics_data['recent'])
+            st.metric("Added (7 days)", metrics_data['recent'])
         
         # Cache los datos de los gráficos
         @st.cache_data(ttl=300)
@@ -189,20 +189,20 @@ def show_dashboard():
         col1, col2 = st.columns(2)
         
         with col1:
-            st.subheader("Negocios por Estado")
+            st.subheader("Businesses by State")
             if not charts_data['states'].empty:
                 fig = px.bar(charts_data['states'], x='state', y='count')
                 st.plotly_chart(fig, use_container_width=True)
         
         with col2:
-            st.subheader("Tipos de Violación")
+            st.subheader("Violation Types")
             if not charts_data['violations'].empty:
                 fig = px.pie(charts_data['violations'], values='count', names='violation_type')
                 st.plotly_chart(fig, use_container_width=True)
 
 def show_search():
     """Display search page."""
-    st.title("🔍 Búsqueda de Negocios")
+    st.title("🔍 Search for Businesses")
     
     with handle_errors():
         # Cache los datos de los filtros
@@ -225,36 +225,36 @@ def show_search():
         
         with col1:
             state = st.selectbox(
-                "Estado",
-                options=["Todos"] + filter_options['states']
+                "State",
+                options=["All"] + filter_options['states']
             )
         
         with col2:
             violation_type = st.selectbox(
-                "Tipo de Violación",
-                options=["Todos"] + filter_options['violations']
+                "Violation Type",
+                options=["All"] + filter_options['violations']
             )
         
         with col3:
-            verified = st.selectbox("Estado de Verificación", ["Todos", "Verificado", "No Verificado"])
+            verified = st.selectbox("Verification Status", ["All", "Verified", "Unverified"])
         
-        # Construir query de manera segura
+        # Build query safely
         query_parts = ["SELECT * FROM businesses WHERE 1=1"]
         params = []
         
-        if state != "Todos":
+        if state != "All":
             query_parts.append("AND state = %s")
             params.append(state)
         
-        if violation_type != "Todos":
+        if violation_type != "All":
             query_parts.append("AND violation_type = %s")
             params.append(violation_type)
         
-        if verified != "Todos":
+        if verified != "All":
             query_parts.append("AND verified = %s")
-            params.append(verified == "Verificado")
+            params.append(verified == "Verified")
         
-        # Agregar ordenamiento y límite
+        # Add sorting and limit
         query_parts.append("ORDER BY created_at DESC LIMIT 1000")
         
         # Ejecutar búsqueda
@@ -263,7 +263,7 @@ def show_search():
         if results:
             df = pd.DataFrame(results)
             
-            # Configurar grid con opciones mejoradas
+            # Configure grid with enhanced options
             gb = GridOptionsBuilder.from_dataframe(df)
             gb.configure_pagination(paginationAutoPageSize=True)
             gb.configure_side_bar()
@@ -284,12 +284,12 @@ def show_search():
                 allow_unsafe_jscode=True
             )
             
-            # Mostrar detalles si se selecciona una fila
+            # Show details if a row is selected
             selected = grid_response['selected_rows']
             if selected:
-                st.subheader("Detalles del Negocio")
+                st.subheader("Business Details")
                 
-                # Formatear fechas para mejor visualización
+                # Format dates for better visualization
                 formatted_data = selected[0].copy()
                 for key in ['created_at', 'updated_at', 'nsl_published_date', 'nsl_effective_date', 'remediated_date']:
                     if key in formatted_data and formatted_data[key]:
@@ -297,82 +297,175 @@ def show_search():
                 
                 st.json(formatted_data)
         else:
-            st.info("No se encontraron resultados")
+            st.info("No results found")
 
 def show_data_management():
     """Display data management page."""
-    st.title("💾 Gestión de Datos")
+    st.title("💾 Data Management")
     
-    tab1, tab2 = st.tabs(["Importar Datos", "Exportar Datos"])
+    tab1, tab2 = st.tabs(["Import Data", "Export Data"])
     
     with tab1:
-        st.subheader("Importar Datos")
-        uploaded_file = st.file_uploader("Selecciona un archivo CSV", type="csv")
+        st.subheader("Import Data")
+        st.write("Upload a CSV file with a 'business_name' column containing the names of businesses to search.")
+        
+        uploaded_file = st.file_uploader("Select a CSV file", type="csv")
         if uploaded_file is not None:
-            df = pd.read_csv(uploaded_file)
-            st.write(df.head())
-            if st.button("Importar Datos"):
-                with st.spinner("Importando datos..."):
-                    # Aquí iría la lógica de importación
-                    st.success(f"Se importaron {len(df)} registros")
+            try:
+                df = pd.read_csv(uploaded_file)
+                st.write("Data preview:")
+                st.write(df.head())
+                
+                # Basic column validation
+                required_columns = ['business_name']
+                missing_columns = [col for col in required_columns if col not in df.columns]
+                
+                if missing_columns:
+                    st.error(f"The CSV file must contain the following columns: {', '.join(missing_columns)}")
+                else:
+                    if st.button("Start Scraping"):
+                        with st.spinner("Starting scraping process..."):
+                            try:
+                                # Save CSV file to temporary location
+                                temp_input_file = os.path.join('temp', 'uploads', 'current_input.csv')
+                                os.makedirs(os.path.dirname(temp_input_file), exist_ok=True)
+                                df.to_csv(temp_input_file, index=False)
+                                
+                                # Start scraping process
+                                from scrapy.crawler import CrawlerProcess
+                                from scrapy.utils.project import get_project_settings
+                                from scraper.spiders.business_spider import BusinessSpider
+                                from multiprocessing import Process
+                                
+                                settings = get_project_settings()
+                                
+                                def run_spider_process():
+                                    process = CrawlerProcess(settings)
+                                    process.crawl(BusinessSpider)
+                                    process.start()
+                                
+                                # Run spider in a separate process
+                                spider_process = Process(target=run_spider_process)
+                                spider_process.start()
+                                
+                                st.success(f"Scraping process started for {len(df)} businesses")
+                                st.info("You can monitor the progress in the metrics tab")
+                                
+                            except Exception as e:
+                                st.error(f"Error starting scraping: {str(e)}")
+            except Exception as e:
+                st.error(f"Error reading CSV file: {str(e)}")
     
     with tab2:
-        st.subheader("Exportar Datos")
-        export_type = st.selectbox("Formato de Exportación", ["CSV", "Excel", "JSON"])
-        if st.button("Exportar Datos"):
-            with st.spinner("Exportando datos..."):
-                # Aquí iría la lógica de exportación
-                st.success("Datos exportados exitosamente")
+        st.subheader("Export Data")
+        
+        # Export options
+        col1, col2 = st.columns(2)
+        with col1:
+            export_type = st.selectbox("Export Format", ["CSV", "Excel", "JSON"])
+        with col2:
+            verified_only = st.checkbox("Export only verified businesses", value=False)
+        
+        if st.button("Export Data"):
+            with st.spinner("Exporting data..."):
+                try:
+                    db = get_database()
+                    
+                    # Build query based on filters
+                    query = "SELECT * FROM businesses"
+                    if verified_only:
+                        query += " WHERE verified = true"
+                    query += " ORDER BY created_at DESC"
+                    
+                    # Get data
+                    results = db.fetch_all(query)
+                    
+                    if not results:
+                        st.warning("No data available for export")
+                        return
+                    
+                    # Convert to DataFrame
+                    df = pd.DataFrame(results)
+                    
+                    # Generate filename with timestamp
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    
+                    # Export according to selected format
+                    if export_type == "CSV":
+                        output = df.to_csv(index=False)
+                        file_name = f"businesses_{timestamp}.csv"
+                        mime_type = "text/csv"
+                    elif export_type == "Excel":
+                        output = df.to_excel(index=False)
+                        file_name = f"businesses_{timestamp}.xlsx"
+                        mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    else:  # JSON
+                        output = df.to_json(orient="records")
+                        file_name = f"businesses_{timestamp}.json"
+                        mime_type = "application/json"
+                    
+                    # Offer download
+                    st.download_button(
+                        label="Download File",
+                        data=output,
+                        file_name=file_name,
+                        mime=mime_type
+                    )
+                    
+                    st.success(f"Data exported successfully: {len(results)} records")
+                    
+                except Exception as e:
+                    st.error(f"Error during export: {str(e)}")
 
 def show_configuration():
     """Display configuration page."""
-    st.title("⚙️ Configuración")
+    st.title("⚙️ Settings")
     
-    # Configuración de la base de datos
-    st.subheader("Configuración de Base de Datos")
+    # Database configuration
+    st.subheader("Database Configuration")
     col1, col2 = st.columns(2)
     with col1:
         st.text_input("Host", value=os.getenv("DB_HOST", "localhost"), disabled=True)
-        st.text_input("Puerto", value=os.getenv("DB_PORT", "5432"), disabled=True)
+        st.text_input("Port", value=os.getenv("DB_PORT", "5432"), disabled=True)
     with col2:
-        st.text_input("Base de Datos", value=os.getenv("DB_NAME", "business_scraper"), disabled=True)
-        st.text_input("Usuario", value=os.getenv("DB_USER", "postgres"), disabled=True)
+        st.text_input("Database", value=os.getenv("DB_NAME", "business_scraper"), disabled=True)
+        st.text_input("User", value=os.getenv("DB_USER", "postgres"), disabled=True)
     
-    # Configuración de caché
-    st.subheader("Configuración de Caché")
-    st.text_input("Tipo de Caché", value=os.getenv("CACHE_TYPE", "memory"), disabled=True)
-    st.text_input("TTL de Caché", value=os.getenv("CACHE_TTL", "3600"), disabled=True)
+    # Cache configuration
+    st.subheader("Cache Configuration")
+    st.text_input("Cache Type", value=os.getenv("CACHE_TYPE", "memory"), disabled=True)
+    st.text_input("Cache TTL", value=os.getenv("CACHE_TTL", "3600"), disabled=True)
     
-    # Configuración del scraper
-    st.subheader("Configuración del Scraper")
+    # Scraper configuration
+    st.subheader("Scraper Configuration")
     col1, col2 = st.columns(2)
     with col1:
-        st.number_input("Hilos", value=int(os.getenv("SCRAPER_THREADS", "4")))
-        st.number_input("Timeout de Peticiones", value=int(os.getenv("REQUEST_TIMEOUT", "30")))
+        st.number_input("Threads", value=int(os.getenv("SCRAPER_THREADS", "4")))
+        st.number_input("Request Timeout", value=int(os.getenv("REQUEST_TIMEOUT", "30")))
     with col2:
-        st.number_input("Máximo de Reintentos", value=int(os.getenv("MAX_RETRIES", "3")))
+        st.number_input("Max Retries", value=int(os.getenv("MAX_RETRIES", "3")))
         st.text_input("User Agent", value=os.getenv("USER_AGENT", ""))
 
 def show_metrics():
     """Display metrics page."""
-    st.title("📈 Métricas")
+    st.title("📈 Metrics")
     
     metrics = get_metrics()
     report = metrics.get_report()
     
-    # Métricas de rendimiento
-    st.subheader("Rendimiento")
+    # Performance metrics
+    st.subheader("Performance")
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        st.metric("Uso de CPU", f"{report.performance['cpu_percent']}%")
+        st.metric("CPU Usage", f"{report.performance['cpu_percent']}%")
     with col2:
-        st.metric("Uso de Memoria", f"{report.performance['memory_mb']:.2f} MB")
+        st.metric("Memory Usage", f"{report.performance['memory_mb']:.2f} MB")
     with col3:
-        st.metric("Conexiones DB", report.database['connections'])
+        st.metric("DB Connections", report.database['connections'])
     
-    # Métricas de caché
-    st.subheader("Caché")
+    # Cache metrics
+    st.subheader("Cache")
     col1, col2 = st.columns(2)
     
     with col1:
@@ -380,14 +473,14 @@ def show_metrics():
     with col2:
         st.metric("Cache Misses", report.cache['misses'])
     
-    # Gráfico de errores
-    st.subheader("Errores por Tipo")
+    # Error metrics
+    st.subheader("Errors by Type")
     error_df = pd.DataFrame(
         list(report.errors.items()),
-        columns=['Tipo de Error', 'Cantidad']
+        columns=['Error Type', 'Count']
     )
     if not error_df.empty:
-        fig = px.bar(error_df, x='Tipo de Error', y='Cantidad')
+        fig = px.bar(error_df, x='Error Type', y='Count')
         st.plotly_chart(fig, use_container_width=True)
 
 if __name__ == "__main__":

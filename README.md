@@ -107,6 +107,8 @@ The application uses PostgreSQL with the following main tables:
 ```bash
 # Run the application
 streamlit run app.py
+# or
+python -m streamlit run app.py
 
 # Run tests
 pytest

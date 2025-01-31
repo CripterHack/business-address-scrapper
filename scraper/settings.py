@@ -200,9 +200,12 @@ CONCURRENT_REQUESTS_PER_IP = 1
 DOWNLOADER_CLIENT_TLS_METHOD = 'TLSv1.2'
 DOWNLOADER_CLIENT_TLS_CIPHERS = 'DEFAULT'
 
-# Qwant API settings
-QWANT_API_URL = "https://api.qwant.com/v3/search/web"
-QWANT_API_KEY = os.getenv('QWANT_API_KEY')
+# DuckDuckGo settings
+DUCKDUCKGO_REGION = "us-en"
+DUCKDUCKGO_SAFESEARCH = "moderate"
+DUCKDUCKGO_TIMEOUT = 30
+DUCKDUCKGO_MAX_RESULTS = 10
+DUCKDUCKGO_BACKEND = "api"  # or "html"
 
 # Request headers
 DEFAULT_REQUEST_HEADERS = {
@@ -237,8 +240,8 @@ ITEM_PIPELINES = {
 PROXY_LIST = os.getenv('PROXY_LIST', '').split(',')
 
 # Output settings
-CSV_OUTPUT_FILE = os.getenv('CSV_OUTPUT_FILE', 'business_data.csv')
-INPUT_FILE = os.getenv('INPUT_FILE', 'businesses.csv')
+CSV_OUTPUT_FILE = os.getenv('CSV_OUTPUT_FILE', 'data/output/business_data.csv')
+INPUT_FILE = os.getenv('INPUT_FILE', 'data/input/businesses.csv')
 
 # Location validation
 NY_STATE_CODE = "NY"
@@ -264,29 +267,63 @@ HTTPCACHE_IGNORE_HTTP_CODES = [404, 403, 429, 500, 502, 503, 504]
 HTTPCACHE_STORAGE = 'scrapy.extensions.httpcache.FilesystemCacheStorage'
 
 # Logging settings
-LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
-LOG_FILE = os.getenv('LOG_FILE', 'scraper.log')
+LOG_LEVEL = os.getenv('LOG_LEVEL', 'DEBUG')
+LOG_FILE = os.getenv('LOG_FILE', 'logs/scraper.log')
 LOG_ENCODING = 'utf-8'
 LOG_FORMAT = '%(asctime)s [%(name)s] %(levelname)s: %(message)s'
 LOG_DATEFORMAT = '%Y-%m-%d %H:%M:%S'
 
 # Additional logging settings for debugging
-LOG_STDOUT = True  # Log standard output
-LOG_SHORT_NAMES = False  # Use full module names in logs
-LOG_FILE_APPEND = True  # Append to log file instead of overwriting
+LOG_STDOUT = True
+LOG_SHORT_NAMES = False
+LOG_FILE_APPEND = True
 
 # Performance monitoring logs
-STATS_DUMP = True  # Enable statistics dumping
+STATS_DUMP = True
 STATS_CLASS = 'scrapy.statscollectors.MemoryStatsCollector'
-STATS_DUMP_FILE = 'scrapy_stats.json'
+STATS_DUMP_FILE = 'scraper_stats.json'
 
 # Debug settings
-DUPEFILTER_DEBUG = True  # Log duplicate filtered requests
-REDIRECT_DEBUG = True  # Log redirect information
-RETRY_DEBUG = True  # Log retry attempts
-PROXY_DEBUG = True  # Log proxy usage
-ROBOTSTXT_DEBUG = True  # Log robots.txt parsing
+DUPEFILTER_DEBUG = True
+REDIRECT_DEBUG = True
+RETRY_DEBUG = True
+PROXY_DEBUG = True
+ROBOTSTXT_DEBUG = True
 
 # Error handling
-HTTPERROR_ALLOWED_CODES = [404, 403]  # Handle these errors in spider
-HTTPERROR_ALLOW_ALL = False 
+HTTPERROR_ALLOWED_CODES = [404, 403]
+HTTPERROR_ALLOW_ALL = False
+
+# Monitoring settings
+PROMETHEUS_ENABLED = False
+PROMETHEUS_PORT = None
+
+# Additional settings
+ENSURE_DIRECTORIES = [
+    'data/input',
+    'data/output',
+    'logs',
+    '.cache'
+]
+
+# Web Interface settings
+WEB_INTERFACE_ENABLED = True
+WEB_INTERFACE_PORT = 8080
+WEB_INTERFACE_HOST = '0.0.0.0'
+MAX_UPLOAD_SIZE = 200 * 1024 * 1024  # 200MB en bytes
+ALLOWED_UPLOAD_EXTENSIONS = ['.csv']
+TEMP_UPLOAD_DIR = 'temp/uploads'
+
+# Input/Output settings
+CSV_OUTPUT_DIR = 'data/output'
+CSV_OUTPUT_FILE = os.path.join(CSV_OUTPUT_DIR, 'business_data.csv')
+TEMP_INPUT_FILE = os.path.join(TEMP_UPLOAD_DIR, 'current_input.csv')
+
+# Additional directories to ensure
+ENSURE_DIRECTORIES = [
+    'temp/uploads',
+    'data/output',
+    'logs',
+    'stats',
+    '.cache'
+] 
