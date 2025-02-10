@@ -633,24 +633,23 @@ class MultiSourceScraper:
                 logger.info(f"Intento {attempt + 1} para {business_name}")
                 
                 try:
-                    # Si no estamos bloqueados por Cloudflare, intentar Chamber of Commerce
+                    # Intentar primero con Chamber of Commerce
                     if not self.cloudflare_blocked:
                         success, address = self.scrape_from_chamber(business_name)
-                        if success and address:
+                        if success and address and address.strip():
+                            logger.info(f"Dirección encontrada en Chamber of Commerce: {address}")
                             return address
                         
                         # Si fuimos bloqueados durante el intento, reiniciar navegador antes de Trustpilot
                         if self.cloudflare_blocked:
                             logger.info("Reiniciando navegador antes de cambiar a Trustpilot")
                             self.restart_browser()
-                            success, address = self.scrape_from_trustpilot(business_name)
-                            if success and address:
-                                return address
-                    else:
-                        # Si ya estábamos bloqueados, intentar con Trustpilot
-                        success, address = self.scrape_from_trustpilot(business_name)
-                        if success and address:
-                            return address
+                    
+                    # Si Chamber of Commerce no tuvo éxito o estaba bloqueado, intentar con Trustpilot
+                    success, address = self.scrape_from_trustpilot(business_name)
+                    if success and address and address.strip():
+                        logger.info(f"Dirección encontrada en Trustpilot: {address}")
+                        return address
                     
                     # Si no tuvimos éxito y hay más intentos, reiniciar navegador
                     if attempt < self.MAX_RETRIES - 1:
@@ -665,6 +664,7 @@ class MultiSourceScraper:
                         time.sleep(random.uniform(5, 15))
                         self.restart_browser()
             
+            logger.info(f"No se encontró dirección válida para: {business_name}")
             return ""
             
         finally:
@@ -688,15 +688,23 @@ class MultiSourceScraper:
                 
                 try:
                     address = self.scrape_business(name)
-                    self.results.append({
-                        "Business Name": name,
-                        "Address": address
-                    })
+                    # Solo guardar si la dirección no está vacía
+                    if address and address.strip():
+                        self.results.append({
+                            "Business Name": name,
+                            "Address": address
+                        })
+                        logger.info(f"Dirección guardada para {name}: {address}")
+                    else:
+                        self.results.append({
+                            "Business Name": name,
+                            "Address": ""
+                        })
+                        logger.info(f"No se encontró dirección válida para {name}")
                     
                     # Guardar resultados parciales
                     results_df = pd.DataFrame(self.results)
                     results_df.to_csv(output_file, index=False)
-                    logger.info(f"Dirección guardada para {name}: {address}")
                     
                 except Exception as e:
                     logger.error(f"Error procesando {name}: {str(e)}")
