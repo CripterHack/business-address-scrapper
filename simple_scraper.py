@@ -376,15 +376,59 @@ class MultiSourceScraper:
             # Si llegamos aquí y estamos bloqueados, retornar
             if self.cloudflare_blocked:
                 return False, ""
-            
-            # Esperar a que la página se cargue completamente
+
+            # Verificar rápidamente si hay resultados
             try:
-                WebDriverWait(self.driver, 10).until(
+                # Esperar un corto tiempo para que cargue el indicador de "no resultados"
+                no_results_indicators = [
+                    "No results found",
+                    "We couldn't find any results",
+                    "Try adjusting your search",
+                    "0 results",
+                    "nothing matches",
+                    "no matches found"
+                ]
+                
+                # Esperar máximo 5 segundos para que la página cargue lo básico
+                WebDriverWait(self.driver, 5).until(
                     lambda d: d.execute_script("return document.readyState") == "complete"
                 )
-            except:
-                pass
+                
+                page_text = self.driver.page_source.lower()
+                for indicator in no_results_indicators:
+                    if indicator.lower() in page_text:
+                        logger.info(f"No se encontraron resultados en Chamber of Commerce para: {business_name}")
+                        return False, ""
+                
+                # Verificar rápidamente si hay elementos de resultados
+                result_indicators = [
+                    "a.card",
+                    ".search-results",
+                    ".business-listing",
+                    ".search-result",
+                    ".listing-item",
+                    ".result-item"
+                ]
+                
+                results_found = False
+                for selector in result_indicators:
+                    try:
+                        results = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                        if results:
+                            results_found = True
+                            break
+                    except:
+                        continue
+                
+                if not results_found:
+                    logger.info(f"No se encontraron elementos de resultados para: {business_name}")
+                    return False, ""
+                
+            except Exception as e:
+                logger.warning(f"Error al verificar resultados: {str(e)}")
+                return False, ""
             
+            # Solo si encontramos resultados, procedemos con el comportamiento normal
             self.simulate_human_behavior()
             
             # Primero intentar encontrar direcciones directamente
@@ -409,47 +453,7 @@ class MultiSourceScraper:
                 except:
                     continue
             
-            # Si no encontramos direcciones, verificar si hay resultados en general
-            result_indicators = [
-                ".search-results",
-                ".business-listing",
-                ".search-result",
-                ".listing-item",
-                ".result-item"
-            ]
-            
-            has_results = False
-            for selector in result_indicators:
-                try:
-                    results = self.driver.find_elements(By.CSS_SELECTOR, selector)
-                    if results:
-                        has_results = True
-                        break
-                except:
-                    continue
-            
-            if not has_results:
-                # Solo si no hay resultados, verificar mensajes de "no resultados"
-                no_results_indicators = [
-                    "No results found",
-                    "We couldn't find any results",
-                    "Try adjusting your search",
-                    "0 results",
-                    "nothing matches",
-                    "no matches found"
-                ]
-                
-                try:
-                    page_text = self.driver.page_source.lower()
-                    for indicator in no_results_indicators:
-                        if indicator.lower() in page_text:
-                            logger.info(f"No se encontraron resultados en Chamber of Commerce para: {business_name}")
-                            return False, ""
-                except:
-                    pass
-            
-            # Si llegamos aquí, encontramos resultados pero no direcciones
-            logger.info(f"Se encontraron resultados pero no direcciones para: {business_name}")
+            logger.info(f"No se encontró dirección en Chamber of Commerce para: {business_name}")
             return False, ""
             
         except Exception as e:
@@ -478,24 +482,36 @@ class MultiSourceScraper:
             ]
             
             result_found = False
+            total_results = 0
+            results_with_location = 0
+            
             for selector in result_selectors:
                 try:
                     results = WebDriverWait(self.driver, 10).until(
                         EC.presence_of_all_elements_located((By.CSS_SELECTOR, selector))
                     )
                     if results:
+                        total_results = len(results)
+                        logger.info(f"Encontrados {total_results} resultados totales para: {business_name}")
+                        
                         for result in results:
                             # Verificar si el resultado contiene el elemento de ubicación
                             location_elements = result.find_elements(By.CSS_SELECTOR, '[data-business-location-typography="true"]')
                             if location_elements:
+                                results_with_location += 1
                                 # Obtener el href antes de hacer clic
                                 result_url = result.get_attribute('href')
                                 if result_url:
+                                    logger.info(f"Encontrado resultado con ubicación ({results_with_location}/{total_results})")
                                     # Navegar directamente a la URL en lugar de hacer clic
                                     self.driver.get(result_url)
                                     result_found = True
                                     time.sleep(random.uniform(3, 5))
                                     break
+                        
+                        if not result_found:
+                            logger.info(f"No se encontraron resultados con ubicación de {total_results} resultados totales para: {business_name}")
+                        
                         if result_found:
                             break
                 except Exception as e:
@@ -503,7 +519,10 @@ class MultiSourceScraper:
                     continue
             
             if not result_found:
-                logger.info(f"No se encontraron resultados en Trustpilot para: {business_name}")
+                if total_results > 0:
+                    logger.info(f"Se encontraron {total_results} resultados pero ninguno con ubicación para: {business_name}")
+                else:
+                    logger.info(f"No se encontraron resultados en Trustpilot para: {business_name}")
                 return False, ""
             
             # Verificar nuevamente Cloudflare después de la navegación
