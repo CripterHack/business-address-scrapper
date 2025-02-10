@@ -1,366 +1,539 @@
+"""Validation system for the scraper."""
+
 import re
-from typing import Dict, Optional, Tuple
+from typing import Dict, Any, Optional, List, Tuple, Union
 from dataclasses import dataclass
-from scraper.exceptions import AddressValidationError
 from datetime import datetime
+from urllib.parse import urlparse
+import logging
+
 from .exceptions import ValidationError
+from .constants import VALID_STATES, PATTERNS
+
+logger = logging.getLogger(__name__)
+
+@dataclass
+class ValidationResult:
+    """Validation result structure."""
+    is_valid: bool
+    error_message: Optional[str] = None
+    warnings: List[str] = None
+    details: Dict[str, Any] = None
+    confidence_score: float = 0.0
+
+    def __post_init__(self):
+        if self.warnings is None:
+            self.warnings = []
+        if self.details is None:
+            self.details = {}
 
 @dataclass
 class Address:
+    """Address data structure."""
     street: str
     city: str
     state: str
     zip_code: str
     is_valid: bool = False
     validation_message: str = ""
+    confidence_score: float = 0.0
+    source: str = ""
+    metadata: Dict[str, Any] = None
 
-class AddressValidator:
-    # NY ZIP code ranges
-    NY_ZIP_RANGES = [
-        (10001, 10292),  # Manhattan
-        (10301, 10314),  # Staten Island
-        (10451, 10475),  # Bronx
-        (11004, 11109),  # Queens
-        (11351, 11697),  # Queens
-        (11201, 11256),  # Brooklyn
-        (12007, 14925),  # Rest of NY State
-    ]
+    def __post_init__(self):
+        if self.metadata is None:
+            self.metadata = {}
 
-    # NY Cities (partial list of major cities)
-    NY_CITIES = {
-        'NEW YORK', 'BROOKLYN', 'BRONX', 'STATEN ISLAND', 'QUEENS',
-        'BUFFALO', 'ROCHESTER', 'YONKERS', 'SYRACUSE', 'ALBANY',
-        'NEW ROCHELLE', 'MOUNT VERNON', 'SCHENECTADY', 'UTICA',
-        'WHITE PLAINS', 'HEMPSTEAD', 'TROY', 'NIAGARA FALLS',
-        'BINGHAMTON', 'FREEPORT', 'VALLEY STREAM'
+class BaseValidator:
+    """Base validator class."""
+    
+    def __init__(self):
+        self.errors: List[str] = []
+        self.warnings: List[str] = []
+        
+    def add_error(self, message: str) -> None:
+        """Add an error message."""
+        self.errors.append(message)
+        logger.error(f"Validation error: {message}")
+        
+    def add_warning(self, message: str) -> None:
+        """Add a warning message."""
+        self.warnings.append(message)
+        logger.warning(f"Validation warning: {message}")
+        
+    def get_result(self) -> ValidationResult:
+        """Get validation result."""
+        return ValidationResult(
+            is_valid=len(self.errors) == 0,
+            error_message='; '.join(self.errors) if self.errors else None,
+            warnings=self.warnings,
+            confidence_score=1.0 if len(self.errors) == 0 else 0.0
+        )
+        
+    def clear(self) -> None:
+        """Clear errors and warnings."""
+        self.errors.clear()
+        self.warnings.clear()
+
+class AddressValidator(BaseValidator):
+    """Address validator with improved validation."""
+    
+    # Invalid address patterns
+    INVALID_PATTERNS = {
+        r'^\s*$',  # Empty or whitespace only
+        r'^[0-9\s]*$',  # Numbers only
+        r'^unknown$',  # Unknown
+        r'^test',  # Test addresses
+        r'^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$',  # Emails
+        r'^https?://',  # URLs
+        r'^[0-9]{3}-[0-9]{3}-[0-9]{4}$',  # Phone numbers
+        r'^P\.?O\.?\s*Box',  # P.O. Box
+        r'^Private\s+Mailbox',  # Private Mailbox
+        r'^General\s+Delivery',  # General Delivery
+    }
+    
+    # Valid street types
+    VALID_STREET_TYPES = {
+        'street', 'avenue', 'road', 'boulevard', 'lane', 'drive',
+        'way', 'court', 'circle', 'plaza', 'square', 'parkway',
+        'st', 'ave', 'rd', 'blvd', 'ln', 'dr', 'ct', 'cir', 'plz', 'sq'
+    }
+    
+    # Valid cardinal directions
+    VALID_DIRECTIONS = {
+        'n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw',
+        'north', 'south', 'east', 'west',
+        'northeast', 'northwest', 'southeast', 'southwest'
     }
 
-    @classmethod
-    def validate_address(cls, address_text: str) -> Address:
-        """Validate and parse a full address string"""
-        try:
-            # Clean and standardize the address
-            clean_address = cls._clean_address(address_text)
-            
-            # Parse address components
-            components = cls._parse_address(clean_address)
-            
-            # Validate each component
-            is_valid, message = cls._validate_components(components)
-            
-            return Address(
-                street=components.get('street', ''),
-                city=components.get('city', ''),
-                state=components.get('state', ''),
-                zip_code=components.get('zip_code', ''),
-                is_valid=is_valid,
-                validation_message=message
-            )
-        except Exception as e:
-            raise AddressValidationError(f"Error validating address: {str(e)}")
+    # Common abbreviations mapping
+    STREET_TYPE_MAPPING = {
+        'st': 'street',
+        'ave': 'avenue',
+        'rd': 'road',
+        'blvd': 'boulevard',
+        'ln': 'lane',
+        'dr': 'drive',
+        'ct': 'court',
+        'cir': 'circle',
+        'plz': 'plaza',
+        'sq': 'square',
+        'pkwy': 'parkway'
+    }
 
-    @staticmethod
-    def _clean_address(address: str) -> str:
-        """Clean and standardize address string"""
-        # Convert to uppercase for consistency
-        address = address.upper()
+    DIRECTION_MAPPING = {
+        'n': 'north',
+        's': 'south',
+        'e': 'east',
+        'w': 'west',
+        'ne': 'northeast',
+        'nw': 'northwest',
+        'se': 'southeast',
+        'sw': 'southwest'
+    }
+    
+    def validate(self, address: Union[str, Dict[str, Any]]) -> ValidationResult:
+        """Validate an address.
         
-        # Remove special characters except comma and dash
-        address = re.sub(r'[^\w\s,-]', '', address)
+        Args:
+            address: Address string or dictionary with address components
+            
+        Returns:
+            ValidationResult: Validation result
+        """
+        self.clear()
         
-        # Standardize whitespace
-        address = ' '.join(address.split())
+        if isinstance(address, str):
+            return self._validate_address_string(address)
+        elif isinstance(address, dict):
+            return self._validate_address_dict(address)
+        else:
+            self.add_error("Invalid address format")
+            return self.get_result()
+    
+    def _validate_address_string(self, address: str) -> ValidationResult:
+        """Validate a string address.
         
-        return address
-
-    @classmethod
-    def _parse_address(cls, address: str) -> Dict[str, str]:
-        """Parse address string into components"""
+        Args:
+            address: Address string to validate
+            
+        Returns:
+            ValidationResult: Validation result
+        """
+        # Validate invalid patterns
+        for pattern in self.INVALID_PATTERNS:
+            if re.match(pattern, address, re.IGNORECASE):
+                self.add_error("Invalid address format")
+                return self.get_result()
+        
+        # Validate length
+        if len(address) < 5:
+            self.add_error("Address too short")
+            return self.get_result()
+        
+        # Validate numbers
+        if not any(c.isdigit() for c in address):
+            self.add_error("Address must contain at least one number")
+            return self.get_result()
+        
+        # Parse and validate components
+        components = self._parse_address(address)
+        return self._validate_components(components)
+    
+    def _validate_address_dict(self, address: Dict[str, Any]) -> ValidationResult:
+        """Validate an address dictionary.
+        
+        Args:
+            address: Dictionary with address components
+            
+        Returns:
+            ValidationResult: Validation result
+        """
+        required_fields = ['street', 'city', 'state', 'zip_code']
+        
+        # Check required fields
+        for field in required_fields:
+            if field not in address:
+                self.add_error(f"Missing required field: {field}")
+                return self.get_result()
+        
+        # Validate street
+        if not self._validate_street(address['street']):
+            self.add_error("Invalid street format")
+        
+        # Validate city
+        if len(address['city']) < 2:
+            self.add_error("City name too short")
+        elif not all(c.isalpha() or c.isspace() or c in "'-." for c in address['city']):
+            self.add_error("City contains invalid characters")
+        
+        # Validate state
+        if address['state'] not in VALID_STATES:
+            self.add_error("Invalid state code")
+        
+        # Validate ZIP code
+        if not re.match(PATTERNS['zip_code'], address['zip_code']):
+            self.add_error("Invalid ZIP code format")
+        
+        return self.get_result()
+    
+    def _parse_address(self, address: str) -> Dict[str, str]:
+        """Parse an address into its components.
+        
+        Args:
+            address: Address string to parse
+            
+        Returns:
+            Dict[str, str]: Dictionary with address components
+        """
         components = {}
-        
-        # Split by comma
         parts = [p.strip() for p in address.split(',')]
         
         if len(parts) >= 1:
             components['street'] = parts[0]
         
         if len(parts) >= 2:
-            # Handle city, state zip
             location_parts = parts[-1].strip().split()
             
             if len(location_parts) >= 2:
-                # Last part should be ZIP code
-                components['zip_code'] = location_parts[-1]
+                # Extract ZIP code
+                zip_match = re.search(PATTERNS['zip_code'], location_parts[-1])
+                if zip_match:
+                    components['zip_code'] = zip_match.group()
+                    location_parts.pop()
                 
-                # Second to last part should be state
-                components['state'] = location_parts[-2]
+                # Extract state
+                if location_parts and location_parts[-1].upper() in VALID_STATES:
+                    components['state'] = location_parts[-1].upper()
+                    location_parts.pop()
                 
-                # Everything else is city
-                components['city'] = ' '.join(location_parts[:-2])
+                # Remaining parts form the city
+                if location_parts:
+                    components['city'] = ' '.join(location_parts)
             
-            # If there's a middle part, it's probably the city
             if len(parts) >= 3 and not components.get('city'):
                 components['city'] = parts[1]
         
         return components
 
-    @classmethod
-    def _validate_components(cls, components: Dict[str, str]) -> Tuple[bool, str]:
-        """Validate address components"""
-        messages = []
+    def _validate_components(self, components: Dict[str, str]) -> ValidationResult:
+        """Validate address components.
         
-        # Validate state
-        if components.get('state') != 'NY':
-            messages.append("Address must be in New York state")
-        
-        # Validate ZIP code
-        zip_code = components.get('zip_code', '')
-        if not cls._is_valid_ny_zip(zip_code):
-            messages.append(f"Invalid NY ZIP code: {zip_code}")
+        Args:
+            components: Dictionary with address components
+            
+        Returns:
+            ValidationResult: Validation result
+        """
+        # Validate street
+        if not components.get('street'):
+            self.add_error("Missing street")
+        elif not self._validate_street(components['street']):
+            self.add_error("Invalid street format")
         
         # Validate city
-        city = components.get('city', '').upper()
-        if city and city not in cls.NY_CITIES:
-            messages.append(f"City not recognized as major NY city: {city}")
+        if not components.get('city'):
+            self.add_error("Missing city")
+        elif len(components['city']) < 2:
+            self.add_error("City name too short")
+        elif not all(c.isalpha() or c.isspace() or c in "'-." for c in components['city']):
+            self.add_error("City contains invalid characters")
         
-        # Validate street address
-        street = components.get('street', '')
-        if not cls._is_valid_street(street):
-            messages.append("Invalid street address format")
+        # Validate state
+        if not components.get('state'):
+            self.add_error("Missing state")
+        elif components['state'] not in VALID_STATES:
+            self.add_error("Invalid state code")
         
-        is_valid = len(messages) == 0
-        message = '; '.join(messages) if messages else "Address validation successful"
+        # Validate ZIP code
+        if not components.get('zip_code'):
+            self.add_error("Missing ZIP code")
+        elif not re.match(PATTERNS['zip_code'], components['zip_code']):
+            self.add_error("Invalid ZIP code format")
         
-        return is_valid, message
-
-    @classmethod
-    def _is_valid_ny_zip(cls, zip_code: str) -> bool:
-        """Validate if ZIP code is within NY ranges"""
-        try:
-            if not zip_code or not zip_code.isdigit() or len(zip_code) != 5:
-                return False
+        return self.get_result()
+    
+    def _validate_street(self, street: str) -> bool:
+        """Validate street format.
+        
+        Args:
+            street: Street string to validate
             
-            zip_int = int(zip_code)
-            return any(start <= zip_int <= end for start, end in cls.NY_ZIP_RANGES)
+        Returns:
+            bool: True if valid, False otherwise
+        """
+        if not street:
+            return False
+
+        words = street.lower().split()
+        
+        # Check minimum length
+        if len(words) < 2:
+            return False
+
+        # Check for number at start
+        if not re.match(r'^\d+', words[0]):
+            return False
+
+        # Check for valid street type
+        has_valid_type = False
+        for word in words:
+            # Check original word and its mapping
+            if word in self.VALID_STREET_TYPES or self.STREET_TYPE_MAPPING.get(word) in self.VALID_STREET_TYPES:
+                has_valid_type = True
+                break
+        
+        if not has_valid_type:
+            return False
+
+        # Check for cardinal direction if present
+        if len(words) > 2:
+            for word in words[1:-1]:  # Exclude initial number and final street type
+                if word in self.VALID_DIRECTIONS or self.DIRECTION_MAPPING.get(word) in self.VALID_DIRECTIONS:
+                    return True
+
+        return True
+
+    def validate_state(self, state: str, target_state: str) -> ValidationResult:
+        """Validate state against target state.
+        
+        Args:
+            state: State to validate
+            target_state: Target state to compare against
+            
+        Returns:
+            ValidationResult: Validation result
+        """
+        if not state:
+            return ValidationResult(
+                is_valid=False,
+                error_message="State is required",
+                confidence_score=0.0
+            )
+            
+        state = state.upper()
+        target_state = target_state.upper()
+        
+        if state not in VALID_STATES:
+            return ValidationResult(
+                is_valid=False,
+                error_message=f"Invalid state code: {state}",
+                confidence_score=0.0
+            )
+            
+        if state != target_state:
+            return ValidationResult(
+                is_valid=False,
+                error_message=f"State {state} does not match target state {target_state}",
+                confidence_score=0.0
+            )
+            
+        return ValidationResult(
+            is_valid=True,
+            confidence_score=1.0
+        )
+
+class BusinessValidator(BaseValidator):
+    """Business data validator."""
+
+    # Common business name patterns to avoid
+    BUSINESS_NAME_BLACKLIST = {
+        'test', 'example', 'demo', 'sample', 'dummy', 'fake',
+        'unknown', 'undefined', 'null', 'none', 'n/a', 'na'
+    }
+
+    # Business name keywords requiring additional validation
+    BUSINESS_NAME_KEYWORDS = {
+        'inc', 'llc', 'ltd', 'corp', 'corporation', 'company', 'co',
+        'incorporated', 'limited', 'partnership', 'associates', 'consulting'
+    }
+
+    def validate(self, data: Dict[str, Any]) -> ValidationResult:
+        """Valida datos de negocio."""
+        self.clear()
+        
+        # Validar campos requeridos
+        required_fields = ['business_name', 'address']
+        for field in required_fields:
+            if field not in data:
+                self.add_error(f"Missing required field: {field}")
+                return self.get_result()
+        
+        # Validar nombre del negocio
+        if not self._validate_business_name(data['business_name']):
+            return self.get_result()
+        
+        # Validar dirección
+        address_validator = AddressValidator()
+        address_result = address_validator.validate(data['address'])
+        
+        if not address_result.is_valid:
+            self.errors.extend(address_result.warnings)
+            self.warnings.extend(address_result.warnings)
+        
+        # Validar URL si existe
+        if 'url' in data and data['url']:
+            if not self._validate_url(data['url']):
+                self.add_error("Invalid URL format")
+        
+        # Validar fechas si existen
+        if 'created_at' in data and data['created_at']:
+            if not self._validate_date(data['created_at']):
+                self.add_error("Invalid created_at date format")
+        
+        return self.get_result()
+    
+    def _validate_business_name(self, name: str) -> bool:
+        """Valida el nombre del negocio."""
+        # Validar longitud
+        if len(name) < 2:
+            self.add_error("Business name too short")
+            return False
+        
+        # Validar palabras en lista negra
+        name_lower = name.lower()
+        for blacklisted in self.BUSINESS_NAME_BLACKLIST:
+            if blacklisted in name_lower:
+                self.add_error(f"Business name contains invalid term: {blacklisted}")
+                return False
+        
+        # Validar caracteres especiales excesivos
+        special_chars = sum(1 for c in name if not c.isalnum() and not c.isspace())
+        if special_chars > len(name) * 0.3:
+            self.add_error("Business name contains too many special characters")
+            return False
+        
+        # Verificar palabras clave
+        words = set(name_lower.split())
+        business_keywords = words.intersection(self.BUSINESS_NAME_KEYWORDS)
+        
+        if business_keywords:
+            if 'inc' in words and not name.endswith(('Inc.', 'Inc', 'Incorporated')):
+                self.add_warning('Inconsistent Inc. formatting')
+            if 'llc' in words and not name.endswith(('LLC', 'L.L.C.')):
+                self.add_warning('Inconsistent LLC formatting')
+        
+        return True
+    
+    def _validate_url(self, url: str) -> bool:
+        """Valida una URL."""
+        try:
+            result = urlparse(url)
+            return all([result.scheme, result.netloc])
+        except Exception:
+            return False
+    
+    def _validate_date(self, date_str: str) -> bool:
+        """Valida una fecha."""
+        try:
+            datetime.strptime(date_str, '%Y-%m-%d')
+            return True
         except ValueError:
             return False
 
-    @staticmethod
-    def _is_valid_street(street: str) -> bool:
-        """Validate street address format"""
-        if not street:
-            return False
-        
-        # Check for number at start of street address
-        has_number = bool(re.match(r'^\d+', street))
-        
-        # Check for common street types
-        street_types = r'\b(STREET|ST|AVENUE|AVE|ROAD|RD|BOULEVARD|BLVD|LANE|LN|DRIVE|DR|COURT|CT|CIRCLE|CIR|PLACE|PL|SQUARE|SQ)\b'
-        has_street_type = bool(re.search(street_types, street))
-        
-        return has_number and has_street_type 
-
-class DataValidator:
-    """Base class for data validation."""
+class URLValidator(BaseValidator):
+    """URL validator with improved validation."""
     
-    @staticmethod
-    def validate_string(value: str, field_name: str, min_length: int = 1, max_length: int = None) -> str:
-        """Validate string fields."""
-        if not isinstance(value, str):
-            raise ValidationError(
-                f"{field_name} must be a string",
-                details={'field': field_name, 'value': value, 'type': type(value).__name__}
-            )
+    def validate(self, url: str) -> ValidationResult:
+        """Validate a URL."""
+        self.clear()
         
-        if len(value.strip()) < min_length:
-            raise ValidationError(
-                f"{field_name} must be at least {min_length} characters long",
-                details={'field': field_name, 'value': value, 'min_length': min_length}
-            )
+        if not url:
+            self.add_error("URL cannot be empty")
+            return self.get_result()
         
-        if max_length and len(value) > max_length:
-            raise ValidationError(
-                f"{field_name} must be no more than {max_length} characters long",
-                details={'field': field_name, 'value': value, 'max_length': max_length}
-            )
-        
-        return value.strip()
-
-    @staticmethod
-    def validate_date(value: str, field_name: str, allow_future: bool = False) -> datetime:
-        """Validate date strings."""
         try:
-            date = datetime.strptime(value, '%Y-%m-%d')
+            result = urlparse(url)
             
-            if not allow_future and date > datetime.now():
-                raise ValidationError(
-                    f"{field_name} cannot be in the future",
-                    details={'field': field_name, 'value': value}
-                )
+            if not all([result.scheme, result.netloc]):
+                self.add_error("Invalid URL format")
+                return self.get_result()
             
-            return date
+            if result.scheme not in ['http', 'https']:
+                self.add_error("URL must use HTTP or HTTPS protocol")
+                return self.get_result()
             
-        except ValueError as e:
-            raise ValidationError(
-                f"Invalid date format for {field_name}. Expected YYYY-MM-DD",
-                details={'field': field_name, 'value': value, 'error': str(e)}
-            )
+            if len(url) > 2048:
+                self.add_warning("URL is unusually long")
+            
+            return self.get_result()
+            
+        except Exception as e:
+            self.add_error(f"Error parsing URL: {str(e)}")
+            return self.get_result()
 
-    @staticmethod
-    def validate_boolean(value: Any, field_name: str) -> bool:
-        """Validate boolean fields."""
-        if isinstance(value, bool):
-            return value
-        
-        if isinstance(value, str):
-            value = value.lower()
-            if value in ('true', '1', 'yes', 'on'):
-                return True
-            if value in ('false', '0', 'no', 'off'):
-                return False
-        
-        raise ValidationError(
-            f"{field_name} must be a boolean value",
-            details={'field': field_name, 'value': value, 'type': type(value).__name__}
-        )
-
-class BusinessValidator(DataValidator):
-    """Validator for business data."""
+class SearchResultValidator(BaseValidator):
+    """Search result validator with improved validation."""
     
-    STATE_CODES = {
-        'AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA',
-        'HI', 'ID', 'IL', 'IN', 'IA', 'KS', 'KY', 'LA', 'ME', 'MD',
-        'MA', 'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV', 'NH', 'NJ',
-        'NM', 'NY', 'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC',
-        'SD', 'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV', 'WI', 'WY',
-        'DC', 'PR', 'VI', 'GU', 'MP', 'AS'
-    }
-
-    ZIP_CODE_PATTERN = re.compile(r'^\d{5}(-\d{4})?$')
-    PHONE_PATTERN = re.compile(r'^\+?1?\d{10}$|^\+?1-\d{3}-\d{3}-\d{4}$')
-    EMAIL_PATTERN = re.compile(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$')
-
-    def validate_business_name(self, name: str) -> str:
-        """Validate business name."""
-        return self.validate_string(name, 'business_name', min_length=2, max_length=200)
-
-    def validate_address(self, address: str) -> str:
-        """Validate street address."""
-        return self.validate_string(address, 'address', min_length=5, max_length=200)
-
-    def validate_city(self, city: str) -> str:
-        """Validate city name."""
-        return self.validate_string(city, 'city', min_length=2, max_length=100)
-
-    def validate_state(self, state: str) -> str:
-        """Validate state code."""
-        state = self.validate_string(state, 'state', min_length=2, max_length=2)
-        if state not in self.STATE_CODES:
-            raise ValidationError(
-                "Invalid state code",
-                details={'field': 'state', 'value': state, 'valid_codes': sorted(self.STATE_CODES)}
-            )
-        return state
-
-    def validate_zip_code(self, zip_code: str) -> str:
-        """Validate ZIP code."""
-        zip_code = self.validate_string(zip_code, 'zip_code', min_length=5)
-        if not self.ZIP_CODE_PATTERN.match(zip_code):
-            raise ValidationError(
-                "Invalid ZIP code format",
-                details={'field': 'zip_code', 'value': zip_code}
-            )
-        return zip_code
-
-    def validate_phone(self, phone: Optional[str]) -> Optional[str]:
-        """Validate phone number."""
-        if phone is None:
-            return None
-            
-        phone = self.validate_string(phone, 'phone')
-        if not self.PHONE_PATTERN.match(phone):
-            raise ValidationError(
-                "Invalid phone number format",
-                details={'field': 'phone', 'value': phone}
-            )
-        return phone
-
-    def validate_email(self, email: Optional[str]) -> Optional[str]:
-        """Validate email address."""
-        if email is None:
-            return None
-            
-        email = self.validate_string(email, 'email')
-        if not self.EMAIL_PATTERN.match(email):
-            raise ValidationError(
-                "Invalid email format",
-                details={'field': 'email', 'value': email}
-            )
-        return email
-
-    def validate_violation_type(self, violation_type: str) -> str:
-        """Validate violation type."""
-        return self.validate_string(violation_type, 'violation_type', min_length=5, max_length=100)
-
-    def validate_dates(self, data: Dict[str, str]) -> Dict[str, datetime]:
-        """Validate all date fields."""
-        dates = {}
+    def validate(self, result: Dict[str, Any]) -> ValidationResult:
+        """Validate a search result."""
+        self.clear()
         
-        # Published date must be in the past
-        dates['nsl_published_date'] = self.validate_date(
-            data['nsl_published_date'], 
-            'nsl_published_date'
-        )
+        # Validate required fields
+        required_fields = ['url', 'title']
+        for field in required_fields:
+            if field not in result:
+                self.add_error(f"Missing required field: {field}")
+                return self.get_result()
         
-        # Effective date can be in the future
-        dates['nsl_effective_date'] = self.validate_date(
-            data['nsl_effective_date'], 
-            'nsl_effective_date',
-            allow_future=True
-        )
+        # Validate URL
+        url_validator = URLValidator()
+        url_result = url_validator.validate(result['url'])
         
-        # Remediated date is optional and must be between published and now
-        if 'remediated_date' in data and data['remediated_date']:
-            remediated_date = self.validate_date(
-                data['remediated_date'],
-                'remediated_date'
-            )
-            
-            if remediated_date < dates['nsl_published_date']:
-                raise ValidationError(
-                    "Remediated date cannot be before published date",
-                    details={
-                        'remediated_date': data['remediated_date'],
-                        'published_date': data['nsl_published_date']
-                    }
-                )
-                
-            dates['remediated_date'] = remediated_date
-        else:
-            dates['remediated_date'] = None
+        if not url_result.is_valid:
+            self.errors.extend(url_result.errors)
+            self.warnings.extend(url_result.warnings)
         
-        return dates
-
-    def validate_all(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Validate all business data fields."""
-        validated = {}
+        # Validate title
+        if len(result['title']) < 3:
+            self.add_error("Title too short")
         
-        # Required string fields
-        validated['business_name'] = self.validate_business_name(data['business_name'])
-        validated['address'] = self.validate_address(data['address'])
-        validated['city'] = self.validate_city(data['city'])
-        validated['state'] = self.validate_state(data['state'])
-        validated['zip_code'] = self.validate_zip_code(data['zip_code'])
-        validated['violation_type'] = self.validate_violation_type(data['violation_type'])
+        # Validate score if exists
+        if 'relevance_score' in result:
+            score = result['relevance_score']
+            if not isinstance(score, (int, float)):
+                self.add_error("Invalid relevance score type")
+            elif not 0 <= score <= 1:
+                self.add_error("Relevance score must be between 0 and 1")
         
-        # Optional fields
-        validated['phone'] = self.validate_phone(data.get('phone'))
-        validated['email'] = self.validate_email(data.get('email'))
-        
-        # Date fields
-        validated.update(self.validate_dates(data))
-        
-        # Boolean fields
-        validated['verified'] = self.validate_boolean(data.get('verified', False), 'verified')
-        
-        return validated 
+        return self.get_result() 

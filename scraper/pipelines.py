@@ -10,38 +10,29 @@ import numpy as np
 
 @dataclass
 class BusinessData:
+    id: int
     business_name: str
-    address: Optional[str] = None
-    city: Optional[str] = None
+    address: str
     state: Optional[str] = None
     zip_code: Optional[str] = None
-    violation_type: Optional[str] = None
-    nsl_published_date: Optional[str] = None
-    nsl_effective_date: Optional[str] = None
-    remediated_date: Optional[str] = None
-    verified: bool = False
-    source_url: Optional[str] = None
-    relevance_score: float = 0.0
-    scraped_at: Optional[str] = None
+    created_at: Optional[str] = None
 
 class BusinessDataPipeline:
     CHUNK_SIZE = 1000  # Number of items to process before writing to disk
 
     def __init__(self):
+        self.logger = logging.getLogger(self.__class__.__name__)
         self.items = []
-        self.logger = logging.getLogger(__name__)
-        self.logger.info("Initializing BusinessDataPipeline")
         self.processed_count = 0
-        self.error_count = 0
         self.skipped_count = 0
+        self.error_count = 0
         self._ensure_output_dir()
         self.stats = {
             'total_items': 0,
             'valid_items': 0,
             'invalid_items': 0,
-            'chunks_written': 0,
             'processing_errors': 0,
-            'validation_errors': 0
+            'chunks_written': 0
         }
 
     def _ensure_output_dir(self):
@@ -67,13 +58,6 @@ class BusinessDataPipeline:
                 self.stats['invalid_items'] += 1
                 return None
             
-            # Validate New York address
-            if not self._validate_ny_address(cleaned_item):
-                self.logger.warning(f"Skipping non-NY address for business: {cleaned_item.get('business_name')}")
-                self.skipped_count += 1
-                self.stats['validation_errors'] += 1
-                return None
-            
             # Add timestamp
             cleaned_item['scraped_at'] = datetime.now().isoformat()
             
@@ -97,96 +81,122 @@ class BusinessDataPipeline:
             self.stats['processing_errors'] += 1
             return None
 
-    def _clean_item(self, item: Dict[str, Any]) -> BusinessData:
-        """Clean and standardize item data"""
+    def _clean_item(self, item):
+        """Clean and validate item data"""
         try:
-            return BusinessData(
-                business_name=self._clean_text(item.get('business_name', '')),
-                address=self._clean_text(item.get('address', '')),
-                city=self._clean_text(item.get('city', '')),
-                state=self._clean_state(item.get('state', '')),
-                zip_code=self._clean_zip(item.get('zip_code', '')),
-                violation_type=self._clean_text(item.get('violation_type', '')),
-                nsl_published_date=self._clean_date(item.get('nsl_published_date', '')),
-                nsl_effective_date=self._clean_date(item.get('nsl_effective_date', '')),
-                remediated_date=self._clean_date(item.get('remediated_date', '')),
-                verified=bool(item.get('verified', False)),
-                source_url=str(item.get('source_url', '')),
-                relevance_score=float(item.get('relevance_score', 0.0))
-            )
-        except (ValueError, TypeError) as e:
-            self.logger.error(f"Data type validation error: {e}")
-            raise
+            # Required fields
+            required_fields = ['id', 'business_name', 'address', 'created_at']
+            for field in required_fields:
+                if not item.get(field):
+                    self.logger.warning(f"Missing required field {field} for business: {item.get('business_name')}")
+                    return None
 
-    def _clean_text(self, text: str) -> str:
-        """Clean and standardize text fields"""
-        if not isinstance(text, str):
-            text = str(text)
-        
-        # Remove extra whitespace and special characters
-        cleaned = re.sub(r'[^\w\s,.-]', '', text)
-        cleaned = ' '.join(cleaned.split())
-        return cleaned.strip()
+            # Clean and format the data
+            cleaned_item = {
+                'id': item['id'],
+                'business_name': item['business_name'].strip(),
+                'address': item['address'].strip(),
+                'created_at': item['created_at']
+            }
 
-    def _clean_state(self, state: str) -> str:
-        """Clean and validate state code"""
+            # Extraer state y zip_code del address si no están presentes
+            if not item.get('state') or not item.get('zip_code'):
+                address_parts = self._parse_address_components(cleaned_item['address'])
+                if address_parts:
+                    # Actualizar la dirección para excluir state y zip_code si se encontraron
+                    if address_parts.get('clean_address'):
+                        cleaned_item['address'] = address_parts['clean_address']
+                    if not item.get('state') and address_parts.get('state'):
+                        cleaned_item['state'] = self._normalize_state(address_parts['state'])
+                    if not item.get('zip_code') and address_parts.get('zip_code'):
+                        cleaned_item['zip_code'] = address_parts['zip_code']
+            else:
+                cleaned_item['state'] = self._normalize_state(item['state'].strip())
+                cleaned_item['zip_code'] = item['zip_code'].strip()
+
+            return cleaned_item
+
+        except Exception as e:
+            self.logger.error(f"Error cleaning item: {str(e)}")
+            self.stats['processing_errors'] += 1
+            return None
+
+    def _normalize_state(self, state):
+        """Normaliza el código de estado a formato de dos letras"""
         if not state:
-            return ''
+            return None
+            
+        # Diccionario de nombres de estados completos a códigos
+        state_mapping = {
+            'ALABAMA': 'AL', 'ALASKA': 'AK', 'ARIZONA': 'AZ', 'ARKANSAS': 'AR',
+            'CALIFORNIA': 'CA', 'COLORADO': 'CO', 'CONNECTICUT': 'CT', 'DELAWARE': 'DE',
+            'FLORIDA': 'FL', 'GEORGIA': 'GA', 'HAWAII': 'HI', 'IDAHO': 'ID',
+            'ILLINOIS': 'IL', 'INDIANA': 'IN', 'IOWA': 'IA', 'KANSAS': 'KS',
+            'KENTUCKY': 'KY', 'LOUISIANA': 'LA', 'MAINE': 'ME', 'MARYLAND': 'MD',
+            'MASSACHUSETTS': 'MA', 'MICHIGAN': 'MI', 'MINNESOTA': 'MN', 'MISSISSIPPI': 'MS',
+            'MISSOURI': 'MO', 'MONTANA': 'MT', 'NEBRASKA': 'NE', 'NEVADA': 'NV',
+            'NEW HAMPSHIRE': 'NH', 'NEW JERSEY': 'NJ', 'NEW MEXICO': 'NM', 'NEW YORK': 'NY',
+            'NORTH CAROLINA': 'NC', 'NORTH DAKOTA': 'ND', 'OHIO': 'OH', 'OKLAHOMA': 'OK',
+            'OREGON': 'OR', 'PENNSYLVANIA': 'PA', 'RHODE ISLAND': 'RI', 'SOUTH CAROLINA': 'SC',
+            'SOUTH DAKOTA': 'SD', 'TENNESSEE': 'TN', 'TEXAS': 'TX', 'UTAH': 'UT',
+            'VERMONT': 'VT', 'VIRGINIA': 'VA', 'WASHINGTON': 'WA', 'WEST VIRGINIA': 'WV',
+            'WISCONSIN': 'WI', 'WYOMING': 'WY'
+        }
         
-        state = str(state).upper().strip()
-        # Ensure it's a valid two-letter state code
-        if len(state) == 2 and state.isalpha():
+        state = state.upper().strip()
+        
+        # Si ya es un código de dos letras válido
+        if len(state) == 2 and state in state_mapping.values():
             return state
-        return ''
+            
+        # Si es un nombre completo
+        if state in state_mapping:
+            return state_mapping[state]
+            
+        # Buscar coincidencias parciales
+        for full_name, code in state_mapping.items():
+            if full_name.startswith(state):
+                return code
+                
+        return state if len(state) == 2 else None
 
-    def _clean_zip(self, zip_code: str) -> str:
-        """Clean and validate ZIP code"""
-        if not zip_code:
-            return ''
-        
-        # Extract just the digits
-        digits = ''.join(filter(str.isdigit, str(zip_code)))
-        
-        # Validate basic ZIP format (5 digits or ZIP+4)
-        if len(digits) in [5, 9]:
-            return digits[:5]  # Return just the first 5 digits
-        return ''
+    def _parse_address_components(self, address):
+        """Extract state and zip code from address string"""
+        if not address:
+            return None
 
-    def _clean_date(self, date_str: str) -> str:
-        """Clean and standardize date format"""
-        if not date_str:
-            return ''
-        
         try:
-            # Try parsing various date formats
-            for fmt in ['%Y-%m-%d', '%m/%d/%Y', '%d-%m-%Y', '%Y/%m/%d']:
-                try:
-                    return datetime.strptime(str(date_str).strip(), fmt).strftime('%Y-%m-%d')
-                except ValueError:
-                    continue
-            return ''
-        except Exception:
-            return ''
+            # Patrones para encontrar state y zip_code
+            state_zip_patterns = [
+                r'(?:,\s*)?([A-Za-z]{2})\s+(\d{5}(?:-\d{4})?)\s*$',  # Estado y ZIP al final
+                r'(?:,\s*)?([A-Za-z]{2})\s*$',  # Solo estado al final
+                r'(?:,\s*)?(\d{5}(?:-\d{4})?)\s*$'  # Solo ZIP al final
+            ]
 
-    def _validate_ny_address(self, item: BusinessData) -> bool:
-        """Validate that the address is in New York"""
-        state = item.state.upper()
-        zip_code = item.zip_code
-        
-        # Check state is NY
-        if state != 'NY':
-            return False
-        
-        # Validate ZIP code is in NY range (100xx-149xx)
-        if zip_code and len(zip_code) == 5:
-            try:
-                zip_prefix = int(zip_code[:3])
-                if not (100 <= zip_prefix <= 149):
-                    return False
-            except ValueError:
-                return False
-        
-        return True
+            address = address.strip()
+            result = {'clean_address': address}
+
+            for pattern in state_zip_patterns:
+                match = re.search(pattern, address, re.IGNORECASE)
+                if match:
+                    groups = match.groups()
+                    if len(groups) == 2:  # Estado y ZIP
+                        result['state'] = groups[0].upper()
+                        result['zip_code'] = groups[1]
+                        result['clean_address'] = address[:match.start()].strip().rstrip(',')
+                    elif len(groups) == 1:  # Solo estado o solo ZIP
+                        if groups[0].isalpha():  # Es estado
+                            result['state'] = groups[0].upper()
+                        else:  # Es ZIP
+                            result['zip_code'] = groups[0]
+                        result['clean_address'] = address[:match.start()].strip().rstrip(',')
+                    break
+
+            return result
+
+        except Exception as e:
+            self.logger.error(f"Error parsing address components: {str(e)}")
+            return None
 
     def _write_chunk(self):
         """Write current items to a chunk file"""
@@ -199,7 +209,10 @@ class BusinessDataPipeline:
             chunk_file = f'output/chunk_{chunk_num:04d}.csv'
             self.logger.info(f"Writing {len(self.items)} items to chunk file: {chunk_file}")
             
+            # Asegurar que las columnas estén en el orden correcto
+            columns = ['id', 'business_name', 'address', 'state', 'zip_code', 'created_at']
             df = pd.DataFrame(self.items)
+            df = df[columns]  # Reordenar columnas
             df.to_csv(chunk_file, index=False)
             
             self.items = []  # Clear the items list
@@ -231,15 +244,21 @@ class BusinessDataPipeline:
                 return
             
             self.logger.debug(f"Found {len(chunk_files)} chunk files to combine")
-            all_chunks = pd.concat(
-                [pd.read_csv(f) for f in chunk_files],
-                ignore_index=True
-            )
+            
+            # Leer y combinar chunks asegurando el orden de las columnas
+            columns = ['id', 'business_name', 'address', 'state', 'zip_code', 'created_at']
+            all_chunks = []
+            for f in chunk_files:
+                df = pd.read_csv(f)
+                df = df[columns]  # Reordenar columnas
+                all_chunks.append(df)
+            
+            final_df = pd.concat(all_chunks, ignore_index=True)
             
             # Save final output
             output_file = os.getenv('CSV_OUTPUT_FILE', 'business_data.csv')
             self.logger.info(f"Saving combined data to {output_file}")
-            all_chunks.to_csv(output_file, index=False)
+            final_df.to_csv(output_file, index=False)
             
             # Clean up chunks
             self.logger.debug("Cleaning up chunk files...")
@@ -252,7 +271,6 @@ class BusinessDataPipeline:
             self.logger.info(f"Valid items: {self.stats['valid_items']}")
             self.logger.info(f"Invalid items: {self.stats['invalid_items']}")
             self.logger.info(f"Processing errors: {self.stats['processing_errors']}")
-            self.logger.info(f"Validation errors: {self.stats['validation_errors']}")
             self.logger.info(f"Chunks written: {self.stats['chunks_written']}")
             self.logger.info(f"Total items saved: {self.processed_count}")
             self.logger.info(f"Items skipped: {self.skipped_count}")

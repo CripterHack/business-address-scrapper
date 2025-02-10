@@ -1,0 +1,7 @@
+id, business_name, address, state, zip_code, created_at
+1, "Vaperanger", "40 Melville Park Road Melville NY 11747", "NY", "11747", "2025-02-02"
+2, "eJuicedb", "40 Melville Park Road Melville NY 11747", "NY", "11747", "2025-02-02"
+3, "elementvape", "300 W Valley Blvd PMB 23, Alhambra, California, 91803-3338, United States", "CA", "91803-3338", "2025-02-02"
+4, "Vape Authority", "9187 Clairemont Mesa Blvd., Suite 596. San Diego, CA 92123", "CA", "92123", "2025-02-02"
+5, "Vape Shack", "70 Pelham Road, Immingham, DN40 1AB, England", "Immingham", "DN40 1AB", "2025-02-02"
+6, "Vape City", " 10200 NW 25th St STE 111 Doral, FL 33172", "Florida", "10001", "2025-02-02"
