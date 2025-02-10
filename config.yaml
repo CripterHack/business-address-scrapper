@@ -34,11 +34,11 @@ logging:
 database:
   enabled: true
   type: postgresql
-  host: localhost
-  port: 5432
-  name: scraper_db
-  user: ${DB_USER}
-  password: ${DB_PASSWORD}
+  host: db
+  port: 5432  # Puerto interno de PostgreSQL
+  name: business_scraper
+  user: postgres
+  password: devpassword123
   pool_size: 5
   max_overflow: 10
   timeout: 30
@@ -109,13 +109,16 @@ security:
   use_encryption: true
   encryption_key: ${ENCRYPTION_KEY}
   allowed_domains:
+    - chamberofcommerce.com
+    - fda.gov
+    - yelp.com
+    - linkedin.com
     - ny.gov
     - nyc.gov
+    - mapquest.com
     - yellowpages.com
     - bbb.org
-    - yelp.com
     - bloomberg.com
-    - linkedin.com
     - manta.com
     - maps.google.com
     - google.com

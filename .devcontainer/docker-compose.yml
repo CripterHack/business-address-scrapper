@@ -5,28 +5,51 @@ services:
     build:
       context: ..
       dockerfile: .devcontainer/Dockerfile
+      args:
+        - ENABLE_AI_FEATURES=${ENABLE_AI_FEATURES:-false}
     volumes:
       - ..:/workspace:cached
       - ~/.gitconfig:/home/vscode/.gitconfig
       - ~/.ssh:/home/vscode/.ssh
     command: sleep infinity
     environment:
+      - DISPLAY=:99
+      - QT_QPA_PLATFORM=offscreen
       - PYTHONPATH=/workspace
       - DB_HOST=db
       - DB_PORT=5432
-      - DB_NAME=business_scraper
+      - DB_NAME=scraper
       - DB_USER=postgres
-      - DB_PASSWORD=devpassword123
+      - DB_PASSWORD=postgres
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - CACHE_TYPE=redis
+      - ENABLE_AI_FEATURES=${ENABLE_AI_FEATURES:-false}
+      - SPLASH_URL=http://splash:8051
     ports:
+      - "8052:8052"  # Puerto para el servicio app
       - "8501:8501"  # Streamlit
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
+      splash:
+        condition: service_healthy
+    networks:
+      - scraper-network
+
+  splash:
+    image: scrapinghub/splash:3.5
+    command: --max-timeout 300 --port 8051
+    restart: unless-stopped
+    ports:
+      - "8051:8051"  # Puerto para el servicio splash
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8051/_ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks:
       - scraper-network
 
@@ -37,14 +60,15 @@ services:
       - postgres-data:/var/lib/postgresql/data
       - ./init-db.sh:/docker-entrypoint-initdb.d/init-db.sh
     environment:
-      POSTGRES_PASSWORD: devpassword123
-      POSTGRES_DB: business_scraper
+      POSTGRES_DB: scraper
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
       POSTGRES_HOST_AUTH_METHOD: trust
     ports:
       - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 5s
+      interval: 10s
       timeout: 5s
       retries: 5
     networks:
@@ -55,18 +79,19 @@ services:
     restart: unless-stopped
     ports:
       - "6379:6379"
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
     volumes:
       - redis-data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
+      interval: 10s
       timeout: 5s
       retries: 5
     networks:
       - scraper-network
 
   pgadmin:
-    image: dpage/pgadmin4
+    image: dpage/pgadmin4:latest
     restart: unless-stopped
     ports:
       - "5050:80"
@@ -88,4 +113,4 @@ networks:
 volumes:
   postgres-data:
   redis-data:
-  pgadmin-data: 
+  pgadmin-data:

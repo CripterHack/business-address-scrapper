@@ -3,7 +3,6 @@
     "dockerComposeFile": "docker-compose.yml",
     "service": "app",
     "workspaceFolder": "/workspace",
-    
     "customizations": {
         "vscode": {
             "extensions": [
@@ -18,7 +17,8 @@
                 "ckolkman.vscode-postgres",
                 "redhat.vscode-yaml",
                 "streetsidesoftware.code-spell-checker",
-                "eamodio.gitlens"
+                "eamodio.gitlens",
+                "visualstudioexptteam.vscodeintellicode"
             ],
             "settings": {
                 "python.defaultInterpreterPath": "/usr/local/bin/python",
@@ -28,14 +28,27 @@
                 "editor.formatOnSave": true,
                 "editor.codeActionsOnSave": {
                     "source.organizeImports": true
+                },
+                "python.analysis.typeCheckingMode": "basic",
+                "python.analysis.diagnosticMode": "workspace",
+                "files.watcherExclude": {
+                    "**/logs/**": true,
+                    "**/cache/**": true,
+                    "**/.git/**": true
                 }
             }
         }
     },
-
-    "forwardPorts": [8501, 5432, 6379, 5050],
-
+    "forwardPorts": [
+        8051,
+        8052,
+        8501,
+        5432,
+        6379,
+        5050
+    ],
     "postCreateCommand": "bash .devcontainer/post-create.sh",
-
-    "remoteUser": "vscode"
-} 
+    "postStartCommand": "bash .devcontainer/start-splash.sh",
+    "remoteUser": "vscode",
+    "shutdownAction": "stopCompose"
+}
