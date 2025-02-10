@@ -1,464 +1,313 @@
-"""Cache management module."""
+"""Sistema de caché para el scraper."""
 
-import json
 import logging
-import os
-import pickle
-import threading
-import time
-from abc import ABC, abstractmethod
+import json
+from typing import Any, Dict, Optional, Union, List
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, Optional, Union
+import pickle
+import hashlib
+from abc import ABC, abstractmethod
 
-import redis
-from diskcache import Cache as DiskCache
-
-from .exceptions import ConfigurationError, CacheError
+from .exceptions import CacheError
 from .metrics import MetricsManager
+from .cache.cleaner import CacheCleaner
 
-logger = logging.getLogger(__name__)
 
 class CacheBackend(ABC):
-    """Abstract base class for cache backends."""
-    
+    """Interfaz abstracta para backends de caché."""
+
     @abstractmethod
     def get(self, key: str) -> Optional[Any]:
-        """Get value from cache."""
+        """Obtiene un valor de la caché."""
         pass
-    
+
     @abstractmethod
     def set(self, key: str, value: Any, ttl: Optional[int] = None) -> None:
-        """Set value in cache with optional TTL in seconds."""
+        """Guarda un valor en la caché."""
         pass
-    
+
     @abstractmethod
     def delete(self, key: str) -> None:
-        """Delete value from cache."""
+        """Elimina un valor de la caché."""
         pass
-    
+
     @abstractmethod
     def clear(self) -> None:
-        """Clear all values from cache."""
+        """Limpia toda la caché."""
         pass
-    
+
     @abstractmethod
-    def close(self) -> None:
-        """Close cache connection."""
+    def get_size(self) -> int:
+        """Obtiene el tamaño actual de la caché en bytes."""
         pass
 
-class RedisCache(CacheBackend):
-    """Redis cache backend."""
-    
-    def __init__(
-        self,
-        host: str = 'localhost',
-        port: int = 6379,
-        db: int = 0,
-        socket_timeout: int = 5,
-        retry_on_timeout: bool = True,
-        max_retries: int = 3
-    ):
-        """Initialize Redis connection with retry logic."""
-        self.client = redis.Redis(
-            host=host,
-            port=port,
-            db=db,
-            socket_timeout=socket_timeout,
-            retry_on_timeout=retry_on_timeout
-        )
-        self.max_retries = max_retries
-        
-        # Test connection
-        self._test_connection()
+    @abstractmethod
+    def get_keys(self) -> List[str]:
+        """Obtiene todas las claves en la caché."""
+        pass
 
-    def _test_connection(self):
-        """Test Redis connection with retries."""
-        for attempt in range(self.max_retries):
-            try:
-                self.client.ping()
-                return
-            except redis.ConnectionError as e:
-                if attempt == self.max_retries - 1:
-                    raise ConfigurationError(
-                        "Failed to connect to Redis",
-                        details={'error': str(e), 'attempts': attempt + 1}
-                    )
-                time.sleep(1)
 
-    def _retry_operation(self, operation):
-        """Retry Redis operation with exponential backoff."""
-        for attempt in range(self.max_retries):
-            try:
-                return operation()
-            except redis.RedisError as e:
-                if attempt == self.max_retries - 1:
-                    raise CacheError(
-                        "Redis operation failed",
-                        details={'error': str(e), 'attempts': attempt + 1}
-                    )
-                time.sleep(2 ** attempt)
+class MemoryCache(CacheBackend):
+    """Implementación de caché en memoria."""
+
+    def __init__(self):
+        self._cache: Dict[str, Dict[str, Any]] = {}
 
     def get(self, key: str) -> Optional[Any]:
-        """Get value from Redis with retry logic."""
-        return self._retry_operation(lambda: self._get(key))
-
-    def _get(self, key: str) -> Optional[Any]:
-        """Internal get implementation."""
-        value = self.client.get(key)
-        if value is None:
+        if key not in self._cache:
             return None
-        try:
-            return pickle.loads(value)
-        except pickle.UnpicklingError as e:
-            logger.error(f"Failed to unpickle value for key {key}: {e}")
+
+        entry = self._cache[key]
+        if self._is_expired(entry):
             self.delete(key)
             return None
 
-    def set(self, key: str, value: Any, ttl: Optional[int] = None) -> None:
-        """Set value in Redis with retry logic."""
-        self._retry_operation(lambda: self._set(key, value, ttl))
-
-    def _set(self, key: str, value: Any, ttl: Optional[int] = None) -> None:
-        """Internal set implementation."""
-        try:
-            pickled_value = pickle.dumps(value)
-            if ttl:
-                self.client.setex(key, ttl, pickled_value)
-            else:
-                self.client.set(key, pickled_value)
-        except pickle.PicklingError as e:
-            raise CacheError(
-                "Failed to pickle value",
-                details={'error': str(e), 'key': key}
-            )
-
-    def delete(self, key: str) -> None:
-        """Delete value from Redis with retry logic."""
-        self._retry_operation(lambda: self.client.delete(key))
-
-    def clear(self) -> None:
-        """Clear all values from Redis with retry logic."""
-        self._retry_operation(lambda: self.client.flushdb())
-
-    def close(self) -> None:
-        """Close Redis connection."""
-        try:
-            self.client.close()
-        except Exception as e:
-            logger.error(f"Error closing Redis connection: {e}")
-
-class MemoryCache(CacheBackend):
-    """In-memory cache backend with size limit and periodic cleanup."""
-    
-    def __init__(self, max_size: int = 1000, cleanup_interval: int = 300):
-        """Initialize in-memory cache with size limit."""
-        self.cache: Dict[str, Dict[str, Any]] = {}
-        self.max_size = max_size
-        self.cleanup_interval = cleanup_interval
-        self.lock = threading.Lock()
-        
-        # Start cleanup thread
-        self._start_cleanup_thread()
-
-    def _start_cleanup_thread(self):
-        """Start periodic cleanup thread."""
-        def cleanup_task():
-            while True:
-                time.sleep(self.cleanup_interval)
-                self._cleanup_expired()
-        
-        self.cleanup_thread = threading.Thread(
-            target=cleanup_task,
-            daemon=True
-        )
-        self.cleanup_thread.start()
-
-    def _cleanup_expired(self):
-        """Remove expired entries."""
-        with self.lock:
-            now = datetime.now()
-            expired_keys = [
-                key for key, data in self.cache.items()
-                if 'expires_at' in data and now > data['expires_at']
-            ]
-            for key in expired_keys:
-                del self.cache[key]
-
-    def _enforce_size_limit(self):
-        """Remove oldest entries if cache exceeds size limit."""
-        with self.lock:
-            if len(self.cache) > self.max_size:
-                # Sort by creation time and remove oldest entries
-                sorted_items = sorted(
-                    self.cache.items(),
-                    key=lambda x: x[1]['created_at']
-                )
-                excess = len(self.cache) - self.max_size
-                for key, _ in sorted_items[:excess]:
-                    del self.cache[key]
-
-    def get(self, key: str) -> Optional[Any]:
-        """Get value from memory with expiration check."""
-        with self.lock:
-            if key not in self.cache:
-                return None
-                
-            data = self.cache[key]
-            now = datetime.now()
-            
-            # Check TTL
-            if 'expires_at' in data and now > data['expires_at']:
-                del self.cache[key]
-                return None
-                
-            # Update access time
-            data['last_accessed'] = now
-            return data['value']
+        return entry["value"]
 
     def set(self, key: str, value: Any, ttl: Optional[int] = None) -> None:
-        """Set value in memory with size limit enforcement."""
-        with self.lock:
-            now = datetime.now()
-            data = {
-                'value': value,
-                'created_at': now,
-                'last_accessed': now
-            }
-            
-            if ttl:
-                data['expires_at'] = now + timedelta(seconds=ttl)
-            
-            self.cache[key] = data
-            self._enforce_size_limit()
+        self._cache[key] = {"value": value, "timestamp": datetime.now(), "ttl": ttl}
 
     def delete(self, key: str) -> None:
-        """Delete value from memory."""
-        with self.lock:
-            self.cache.pop(key, None)
+        self._cache.pop(key, None)
 
     def clear(self) -> None:
-        """Clear all values from memory cache."""
-        with self.lock:
-            self.cache.clear()
+        self._cache.clear()
 
-    def close(self) -> None:
-        """No-op for memory cache."""
-        pass
+    def get_size(self) -> int:
+        return sum(len(pickle.dumps(entry)) for entry in self._cache.values())
 
-class FileSystemCache(CacheBackend):
-    """File system cache backend with error handling."""
-    
-    def __init__(self, cache_dir: Union[str, Path], cleanup_interval: int = 3600):
-        """Initialize file system cache."""
+    def get_keys(self) -> List[str]:
+        return list(self._cache.keys())
+
+    def _is_expired(self, entry: Dict[str, Any]) -> bool:
+        if entry["ttl"] is None:
+            return False
+        expiry = entry["timestamp"] + timedelta(seconds=entry["ttl"])
+        return datetime.now() > expiry
+
+
+class FileCache(CacheBackend):
+    """Implementación de caché en archivo."""
+
+    def __init__(self, cache_dir: str = ".cache"):
         self.cache_dir = Path(cache_dir)
-        self.cleanup_interval = cleanup_interval
-        self.last_cleanup = 0
-        
-        try:
-            self.cache_dir.mkdir(parents=True, exist_ok=True)
-        except OSError as e:
-            raise ConfigurationError(
-                "Failed to create cache directory",
-                details={'error': str(e), 'path': str(cache_dir)}
-            )
-
-    def _cleanup_if_needed(self):
-        """Perform cleanup if interval has passed."""
-        now = time.time()
-        if now - self.last_cleanup > self.cleanup_interval:
-            self._cleanup_expired()
-            self.last_cleanup = now
-
-    def _cleanup_expired(self):
-        """Remove expired cache files."""
-        try:
-            for path in self.cache_dir.glob('*.cache'):
-                try:
-                    with open(path, 'rb') as f:
-                        data = pickle.load(f)
-                    
-                    if 'expires_at' in data and datetime.now() > data['expires_at']:
-                        path.unlink()
-                except (OSError, pickle.UnpicklingError) as e:
-                    logger.error(f"Error cleaning up cache file {path}: {e}")
-                    try:
-                        path.unlink()
-                    except OSError:
-                        pass
-        except Exception as e:
-            logger.error(f"Error during cache cleanup: {e}")
-
-    def _get_path(self, key: str) -> Path:
-        """Get file path for cache key."""
-        # Use hash of key to avoid file system issues
-        return self.cache_dir / f"{hash(key)}.cache"
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
 
     def get(self, key: str) -> Optional[Any]:
-        """Get value from file system with error handling."""
-        self._cleanup_if_needed()
-        path = self._get_path(key)
-        
-        if not path.exists():
-            return None
-            
         try:
-            with open(path, 'rb') as f:
-                data = pickle.load(f)
-                
-            # Check TTL
-            if 'expires_at' in data and datetime.now() > data['expires_at']:
+            file_path = self._get_file_path(key)
+            if not file_path.exists():
+                return None
+
+            with open(file_path, "rb") as f:
+                entry = pickle.load(f)
+
+            if self._is_expired(entry):
                 self.delete(key)
                 return None
-                
-            return data['value']
-            
-        except (OSError, pickle.UnpicklingError) as e:
-            logger.error(f"Error reading cache file: {e}")
-            try:
-                path.unlink()
-            except OSError:
-                pass
+
+            return entry["value"]
+        except Exception as e:
+            logging.warning(f"Error reading from file cache: {str(e)}")
             return None
 
     def set(self, key: str, value: Any, ttl: Optional[int] = None) -> None:
-        """Set value in file system with error handling."""
-        path = self._get_path(key)
-        
-        data = {
-            'value': value,
-            'created_at': datetime.now()
-        }
-        
-        if ttl:
-            data['expires_at'] = datetime.now() + timedelta(seconds=ttl)
-        
         try:
-            with open(path, 'wb') as f:
-                pickle.dump(data, f)
-        except (OSError, pickle.PicklingError) as e:
-            raise CacheError(
-                "Failed to write cache file",
-                details={'error': str(e), 'path': str(path)}
-            )
+            file_path = self._get_file_path(key)
+            entry = {"value": value, "timestamp": datetime.now(), "ttl": ttl}
+            with open(file_path, "wb") as f:
+                pickle.dump(entry, f)
+        except Exception as e:
+            logging.error(f"Error writing to file cache: {str(e)}")
 
     def delete(self, key: str) -> None:
-        """Delete value from file system with error handling."""
-        path = self._get_path(key)
         try:
-            if path.exists():
-                path.unlink()
-        except OSError as e:
-            logger.error(f"Error deleting cache file: {e}")
+            file_path = self._get_file_path(key)
+            if file_path.exists():
+                file_path.unlink()
+        except Exception as e:
+            logging.warning(f"Error deleting from file cache: {str(e)}")
 
     def clear(self) -> None:
-        """Clear all values from file system cache with error handling."""
         try:
-            for path in self.cache_dir.glob('*.cache'):
-                try:
-                    path.unlink()
-                except OSError as e:
-                    logger.error(f"Error deleting cache file {path}: {e}")
+            for file_path in self.cache_dir.glob("*"):
+                file_path.unlink()
         except Exception as e:
-            logger.error(f"Error clearing cache directory: {e}")
+            logging.error(f"Error clearing file cache: {str(e)}")
 
-    def close(self) -> None:
-        """No-op for file system cache."""
-        pass
+    def get_size(self) -> int:
+        total_size = 0
+        for file_path in self.cache_dir.glob("*.cache"):
+            try:
+                total_size += file_path.stat().st_size
+            except Exception:
+                continue
+        return total_size
 
-class DiskCacheBackend(CacheBackend):
-    """Disk cache backend using diskcache library."""
-    
-    def __init__(self, cache_dir: Union[str, Path]):
-        """Initialize disk cache."""
-        self.cache = DiskCache(str(cache_dir))
+    def get_keys(self) -> List[str]:
+        return [self._get_key_from_path(p) for p in self.cache_dir.glob("*.cache")]
+
+    def _get_file_path(self, key: str) -> Path:
+        """Genera la ruta del archivo de caché."""
+        hashed_key = hashlib.md5(key.encode()).hexdigest()
+        return self.cache_dir / f"{hashed_key}.cache"
+
+    def _get_key_from_path(self, path: Path) -> str:
+        """Obtiene la clave original de la ruta del archivo."""
+        return path.stem
+
+    def _is_expired(self, entry: Dict[str, Any]) -> bool:
+        if entry["ttl"] is None:
+            return False
+        expiry = entry["timestamp"] + timedelta(seconds=entry["ttl"])
+        return datetime.now() > expiry
+
+
+class RedisCache(CacheBackend):
+    """Implementación de caché en Redis."""
+
+    def __init__(self, host: str = "localhost", port: int = 6379, db: int = 0):
+        try:
+            import redis
+
+            self.client = redis.Redis(host=host, port=port, db=db)
+            self.client.ping()  # Verificar conexión
+        except ImportError:
+            raise CacheError("Redis package not installed")
+        except Exception as e:
+            raise CacheError(f"Error connecting to Redis: {str(e)}")
 
     def get(self, key: str) -> Optional[Any]:
-        """Get value from disk cache."""
-        return self.cache.get(key)
+        try:
+            value = self.client.get(key)
+            if value is None:
+                return None
+            return pickle.loads(value)
+        except Exception as e:
+            logging.warning(f"Error reading from Redis cache: {str(e)}")
+            return None
 
     def set(self, key: str, value: Any, ttl: Optional[int] = None) -> None:
-        """Set value in disk cache."""
-        self.cache.set(key, value, expire=ttl)
+        try:
+            serialized_value = pickle.dumps(value)
+            if ttl is not None:
+                self.client.setex(key, ttl, serialized_value)
+            else:
+                self.client.set(key, serialized_value)
+        except Exception as e:
+            logging.error(f"Error writing to Redis cache: {str(e)}")
 
     def delete(self, key: str) -> None:
-        """Delete value from disk cache."""
-        self.cache.delete(key)
+        try:
+            self.client.delete(key)
+        except Exception as e:
+            logging.warning(f"Error deleting from Redis cache: {str(e)}")
 
     def clear(self) -> None:
-        """Clear all values from disk cache."""
-        self.cache.clear()
+        try:
+            self.client.flushdb()
+        except Exception as e:
+            logging.error(f"Error clearing Redis cache: {str(e)}")
 
-    def close(self) -> None:
-        """Close disk cache."""
-        self.cache.close()
+    def get_size(self) -> int:
+        try:
+            info = self.client.info(section="memory")
+            return info["used_memory"]
+        except Exception:
+            return 0
+
+    def get_keys(self) -> List[str]:
+        try:
+            return [k.decode() for k in self.client.keys("*")]
+        except Exception:
+            return []
+
 
 class CacheManager:
-    """Cache manager with metrics tracking."""
-    
-    def __init__(
-        self,
-        backend: str = 'memory',
-        cache_dir: Optional[Union[str, Path]] = None,
-        redis_host: str = 'localhost',
-        redis_port: int = 6379,
-        redis_db: int = 0,
-        metrics_manager: Optional[MetricsManager] = None
-    ):
-        """Initialize cache manager."""
-        self.metrics = metrics_manager
-        
-        if backend == 'redis':
-            self.backend = RedisCache(
-                host=redis_host,
-                port=redis_port,
-                db=redis_db
-            )
-        elif backend == 'filesystem':
-            if not cache_dir:
-                raise ConfigurationError("cache_dir required for filesystem cache")
-            self.backend = FileSystemCache(cache_dir)
-        elif backend == 'diskcache':
-            if not cache_dir:
-                raise ConfigurationError("cache_dir required for disk cache")
-            self.backend = DiskCacheBackend(cache_dir)
-        elif backend == 'memory':
-            self.backend = MemoryCache()
-        else:
-            raise ConfigurationError(f"Unknown cache backend: {backend}")
+    """Administrador de caché en memoria."""
+
+    def __init__(self):
+        """Inicializar el administrador de caché."""
+        self._cache: Dict[str, Dict[str, Any]] = {}
+        self._hits = 0
+        self._misses = 0
 
     def get(self, key: str) -> Optional[Any]:
-        """Get value from cache with metrics tracking."""
-        value = self.backend.get(key)
-        
-        if self.metrics:
-            if value is None:
-                self.metrics.record_cache_miss()
+        """Obtener un valor del caché."""
+        if key in self._cache:
+            entry = self._cache[key]
+            if not self._is_expired(entry):
+                self._hits += 1
+                return entry["value"]
             else:
-                self.metrics.record_cache_hit()
-        
-        return value
+                del self._cache[key]
+        self._misses += 1
+        return None
 
-    def set(self, key: str, value: Any, ttl: Optional[int] = None) -> None:
-        """Set value in cache."""
-        self.backend.set(key, value, ttl)
+    def set(self, key: str, value: Any, ttl: int = 3600) -> None:
+        """Establecer un valor en el caché."""
+        self._cache[key] = {"value": value, "expires_at": datetime.now() + timedelta(seconds=ttl)}
 
     def delete(self, key: str) -> None:
-        """Delete value from cache."""
-        self.backend.delete(key)
+        """Eliminar un valor del caché."""
+        if key in self._cache:
+            del self._cache[key]
+
+    def cleanup(self, max_size: int = 1000, threshold: int = 800) -> None:
+        """Limpiar entradas expiradas y mantener el tamaño del caché."""
+        # Eliminar entradas expiradas
+        now = datetime.now()
+        expired_keys = [key for key, entry in self._cache.items() if self._is_expired(entry, now)]
+        for key in expired_keys:
+            del self._cache[key]
+
+        # Si aún excede el umbral, eliminar las entradas más antiguas
+        if len(self._cache) > threshold:
+            sorted_entries = sorted(self._cache.items(), key=lambda x: x[1]["expires_at"])
+            entries_to_remove = len(self._cache) - max_size
+            if entries_to_remove > 0:
+                for key, _ in sorted_entries[:entries_to_remove]:
+                    del self._cache[key]
 
     def clear(self) -> None:
-        """Clear all values from cache."""
-        self.backend.clear()
+        """Limpiar todo el caché."""
+        self._cache.clear()
+        self._hits = 0
+        self._misses = 0
 
-    def close(self) -> None:
-        """Close cache connection."""
-        self.backend.close()
+    def get_stats(self) -> Dict[str, int]:
+        """Obtener estadísticas del caché."""
+        return {"size": len(self._cache), "hits": self._hits, "misses": self._misses}
 
-    def __enter__(self):
-        """Context manager enter."""
-        return self
+    def _is_expired(self, entry: Dict[str, Any], now: Optional[datetime] = None) -> bool:
+        """Verificar si una entrada ha expirado."""
+        if now is None:
+            now = datetime.now()
+        return entry["expires_at"] < now
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """Context manager exit."""
-        self.close() 
+    def get_json(self, key: str) -> Optional[Dict[str, Any]]:
+        """Obtiene y deserializa un valor JSON de la caché."""
+        try:
+            value = self.get(key)
+            if value is not None:
+                return json.loads(value)
+            return None
+        except json.JSONDecodeError as e:
+            logging.error(f"Error decoding JSON from cache: {str(e)}")
+            return None
+
+    def set_json(self, key: str, value: Dict[str, Any], ttl: int = 3600) -> None:
+        """Serializa y guarda un valor JSON en la caché."""
+        try:
+            serialized = json.dumps(value)
+            self.set(key, serialized, ttl)
+        except (TypeError, ValueError) as e:
+            logging.error(f"Error encoding JSON for cache: {str(e)}")
+
+    def generate_key(self, *args: Any, **kwargs: Any) -> str:
+        """Genera una clave de caché única basada en los argumentos."""
+        key_parts = [str(arg) for arg in args]
+        key_parts.extend(f"{k}={v}" for k, v in sorted(kwargs.items()))
+        key_string = "|".join(key_parts)
+        return hashlib.md5(key_string.encode()).hexdigest()

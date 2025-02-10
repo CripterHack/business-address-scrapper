@@ -1,357 +1,269 @@
-"""Database operations module."""
+"""Database module for the scraper."""
 
+from typing import Any, Dict, List, Optional, Type, TypeVar, cast
 import logging
-import time
 from contextlib import contextmanager
-from typing import Any, Dict, Generator, List, Optional, Tuple
-from datetime import datetime
 
-import psycopg2
-from psycopg2.extras import DictCursor
-from psycopg2.pool import SimpleConnectionPool
-from psycopg2.extensions import connection as Connection
+from sqlalchemy import (
+    create_engine,
+    MetaData,
+    Table,
+    Column,
+    Integer,
+    String,
+    DateTime,
+    JSON,
+    text,
+    inspect,
+)
+from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy.exc import SQLAlchemyError, OperationalError
+from sqlalchemy.engine import Engine
+from sqlalchemy.pool import QueuePool
 
-from .exceptions import DatabaseError, ValidationError
-from .settings import DatabaseSettings
+from .exceptions import DatabaseError
 
 logger = logging.getLogger(__name__)
 
-class QueryBuilder:
-    """SQL query builder with parameter binding."""
-    
-    def __init__(self):
-        """Initialize query builder."""
-        self.query_parts = []
-        self.params = []
+# Configuración base de SQLAlchemy
+Base = declarative_base()
+metadata = MetaData()
 
-    def add(self, part: str, param: Any = None):
-        """Add a query part and optional parameter."""
-        self.query_parts.append(part)
-        if param is not None:
-            self.params.append(param)
-        return self
 
-    def build(self) -> Tuple[str, tuple]:
-        """Build final query and parameters."""
-        return " ".join(self.query_parts), tuple(self.params)
+class DatabaseSettings:
+    """Database connection settings."""
+
+    def __init__(
+        self,
+        host: str = "db",
+        port: int = 5432,
+        name: str = "scraper",
+        user: str = "postgres",
+        password: str = "postgres",
+        pool_size: int = 5,
+        max_overflow: int = 10,
+        timeout: int = 30,
+    ):
+        """Initialize database settings."""
+        self.host = host
+        self.port = port
+        self.name = name
+        self.user = user
+        self.password = password
+        self.pool_size = pool_size
+        self.max_overflow = max_overflow
+        self.timeout = timeout
+
+    @property
+    def connection_string(self) -> str:
+        """Get database connection string."""
+        return f"postgresql://{self.user}:{self.password}@{self.host}:{self.port}/{self.name}"
+
 
 class Database:
-    """Database connection and operations handler."""
-    
-    MAX_RETRIES = 3
-    RETRY_DELAY = 1  # seconds
-    
+    """Database connection manager."""
+
     def __init__(self, settings: DatabaseSettings):
-        """Initialize database connection pool."""
+        """Initialize database connection."""
         self.settings = settings
-        self.pool = None
-        self._create_connection_pool()
-        self._initialize_database()
+        self.engine = None
+        self.Session = None
+        self._initialize_connection()
 
-    def _create_connection_pool(self) -> None:
-        """Create database connection pool with retry logic."""
-        retries = 0
-        while retries < self.MAX_RETRIES:
-            try:
-                self.pool = SimpleConnectionPool(
-                    minconn=1,
-                    maxconn=self.settings.pool_size,
-                    host=self.settings.host,
-                    port=self.settings.port,
-                    dbname=self.settings.name,
-                    user=self.settings.user,
-                    password=self.settings.password,
-                    cursor_factory=DictCursor,
-                    # Configuración adicional para mejor rendimiento
-                    keepalives=1,
-                    keepalives_idle=30,
-                    keepalives_interval=10,
-                    keepalives_count=5
-                )
-                return
-            except psycopg2.Error as e:
-                retries += 1
-                if retries == self.MAX_RETRIES:
-                    raise DatabaseError(
-                        "Failed to create database connection pool after multiple attempts",
-                        details={'error': str(e), 'attempts': retries}
-                    )
-                logger.warning(f"Connection attempt {retries} failed, retrying in {self.RETRY_DELAY}s...")
-                time.sleep(self.RETRY_DELAY)
+    def _initialize_connection(self) -> None:
+        """Initialize database connection with retry logic."""
+        try:
+            self.engine = self._create_engine()
+            self.Session = sessionmaker(bind=self.engine)
+            # Test connection
+            with self.engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+        except OperationalError as e:
+            logger.error(f"Failed to connect to database: {e}")
+            raise DatabaseError(f"Database connection failed: {e}")
+        except Exception as e:
+            logger.error(f"Unexpected error connecting to database: {e}")
+            raise DatabaseError(f"Database initialization failed: {e}")
 
-    def _initialize_database(self) -> None:
-        """Initialize database schema and indexes."""
-        self.create_tables()
-        self._create_additional_indexes()
-
-    def _create_additional_indexes(self) -> None:
-        """Create additional indexes for better query performance."""
-        indexes = [
-            """
-            CREATE INDEX IF NOT EXISTS idx_businesses_dates_composite 
-            ON businesses(nsl_published_date, nsl_effective_date, remediated_date);
-            """,
-            """
-            CREATE INDEX IF NOT EXISTS idx_businesses_name_trgm 
-            ON businesses USING gin(business_name gin_trgm_ops);
-            """,
-            """
-            CREATE INDEX IF NOT EXISTS idx_businesses_address_trgm 
-            ON businesses USING gin(address gin_trgm_ops);
-            """
-        ]
-        
-        for index in indexes:
-            try:
-                self.execute(index)
-            except Exception as e:
-                logger.warning(f"Failed to create index: {e}")
-
-    def _validate_business_data(self, business_data: Dict[str, Any]) -> None:
-        """Validate business data before database operations."""
-        required_fields = {
-            'business_name', 'address', 'city', 'state', 'zip_code',
-            'violation_type', 'nsl_published_date', 'nsl_effective_date'
-        }
-        
-        # Validar campos requeridos
-        missing_fields = required_fields - business_data.keys()
-        if missing_fields:
-            raise ValidationError(
-                "Missing required business data fields",
-                details={'missing_fields': list(missing_fields)}
+    def _create_engine(self) -> Engine:
+        """Create database engine."""
+        try:
+            return create_engine(
+                self.settings.connection_string,
+                poolclass=QueuePool,
+                pool_size=self.settings.pool_size,
+                max_overflow=self.settings.max_overflow,
+                pool_timeout=self.settings.timeout,
+                pool_pre_ping=True,
             )
-        
-        # Validar formato de estado
-        if not isinstance(business_data['state'], str) or len(business_data['state']) != 2:
-            raise ValidationError(
-                "Invalid state format",
-                details={'state': business_data['state']}
-            )
-        
-        # Validar código postal
-        if not isinstance(business_data['zip_code'], str) or not business_data['zip_code'].isdigit():
-            raise ValidationError(
-                "Invalid zip code format",
-                details={'zip_code': business_data['zip_code']}
-            )
-        
-        # Validar fechas
-        date_fields = ['nsl_published_date', 'nsl_effective_date', 'remediated_date']
-        for field in date_fields:
-            if field in business_data and business_data[field]:
-                try:
-                    if isinstance(business_data[field], str):
-                        datetime.strptime(business_data[field], '%Y-%m-%d')
-                except ValueError as e:
-                    raise ValidationError(
-                        f"Invalid date format for {field}",
-                        details={'field': field, 'value': business_data[field]}
-                    )
+        except Exception as e:
+            raise DatabaseError(f"Error creating database engine: {e}")
 
     @contextmanager
-    def get_connection(self) -> Generator[Connection, None, None]:
-        """Get a connection from the pool with automatic cleanup."""
-        conn = None
+    def session_scope(self):
+        """Provide a transactional scope around a series of operations."""
+        if not self.Session:
+            raise DatabaseError("Database session not initialized")
+
+        session = self.Session()
         try:
-            conn = self.pool.getconn()
-            yield conn
-            conn.commit()
-        except psycopg2.Error as e:
-            if conn:
-                conn.rollback()
-            raise DatabaseError(
-                "Database operation failed",
-                details={'error': str(e)}
-            )
+            yield session
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            raise DatabaseError(f"Database session error: {e}")
         finally:
-            if conn:
-                self.pool.putconn(conn)
+            session.close()
 
-    def execute(self, query: str, params: Optional[tuple] = None, retries: int = MAX_RETRIES) -> None:
-        """Execute a query without returning results, with retry logic."""
-        last_error = None
-        for attempt in range(retries):
+    def execute(self, query: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        """Execute a SQL query and return results."""
+        with self.session_scope() as session:
             try:
-                with self.get_connection() as conn:
-                    with conn.cursor() as cur:
-                        cur.execute(query, params)
-                return
-            except psycopg2.Error as e:
-                last_error = e
-                if attempt < retries - 1:
-                    logger.warning(f"Query attempt {attempt + 1} failed, retrying in {self.RETRY_DELAY}s...")
-                    time.sleep(self.RETRY_DELAY)
-        
-        raise DatabaseError(
-            "Query execution failed after multiple attempts",
-            details={'error': str(last_error), 'attempts': retries}
-        )
+                result = session.execute(text(query), params or {})
+                return [dict(row._mapping) for row in result]
+            except SQLAlchemyError as e:
+                raise DatabaseError(f"Error executing query: {e}")
 
-    def fetch_one(self, query: str, params: Optional[tuple] = None) -> Optional[Dict[str, Any]]:
-        """Fetch a single row from the database."""
-        with self.get_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(query, params)
-                row = cur.fetchone()
-                return dict(row) if row else None
-
-    def fetch_all(self, query: str, params: Optional[tuple] = None) -> List[Dict[str, Any]]:
-        """Fetch all rows from the database."""
-        with self.get_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(query, params)
-                rows = cur.fetchall()
-                return [dict(row) for row in rows]
-
-    def insert_business(self, business_data: Dict[str, Any]) -> int:
-        """Insert business data and return the ID."""
-        self._validate_business_data(business_data)
-        
-        query = QueryBuilder()
-        query.add("""
-            INSERT INTO businesses (
-                business_name, address, city, state, zip_code,
-                violation_type, nsl_published_date, nsl_effective_date,
-                remediated_date, verified, created_at
-            ) VALUES (
-                %(business_name)s, %(address)s, %(city)s, %(state)s, %(zip_code)s,
-                %(violation_type)s, %(nsl_published_date)s, %(nsl_effective_date)s,
-                %(remediated_date)s, %(verified)s, NOW()
-            ) ON CONFLICT (business_name, address) 
-            DO UPDATE SET 
-                updated_at = NOW(),
-                violation_type = EXCLUDED.violation_type,
-                nsl_published_date = EXCLUDED.nsl_published_date,
-                nsl_effective_date = EXCLUDED.nsl_effective_date,
-                remediated_date = EXCLUDED.remediated_date,
-                verified = EXCLUDED.verified
-            RETURNING id;
-        """)
-        
-        try:
-            with self.get_connection() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(*query.build(), business_data)
-                    return cur.fetchone()[0]
-        except psycopg2.IntegrityError as e:
-            raise DatabaseError(
-                "Duplicate business entry",
-                details={'error': str(e), 'business': business_data}
-            )
-
-    def update_business(self, business_id: int, business_data: Dict[str, Any]) -> None:
-        """Update business data."""
-        self._validate_business_data(business_data)
-        
-        query = QueryBuilder()
-        query.add("""
-            UPDATE businesses SET
-                business_name = %(business_name)s,
-                address = %(address)s,
-                city = %(city)s,
-                state = %(state)s,
-                zip_code = %(zip_code)s,
-                violation_type = %(violation_type)s,
-                nsl_published_date = %(nsl_published_date)s,
-                nsl_effective_date = %(nsl_effective_date)s,
-                remediated_date = %(remediated_date)s,
-                verified = %(verified)s,
-                updated_at = NOW()
-            WHERE id = %(id)s;
-        """)
-        
-        business_data['id'] = business_id
-        self.execute(*query.build(), business_data)
-
-    def get_business_by_id(self, business_id: int) -> Optional[Dict[str, Any]]:
-        """Get business by ID."""
-        query = QueryBuilder()
-        query.add("SELECT * FROM businesses WHERE id = %s;", business_id)
-        return self.fetch_one(*query.build())
-
-    def get_businesses_by_state(self, state: str) -> List[Dict[str, Any]]:
-        """Get all businesses in a state."""
-        query = QueryBuilder()
-        query.add(
-            "SELECT * FROM businesses WHERE state = %s ORDER BY business_name;",
-            state
-        )
-        return self.fetch_all(*query.build())
-
-    def get_unverified_businesses(self) -> List[Dict[str, Any]]:
-        """Get all unverified businesses."""
-        query = QueryBuilder()
-        query.add(
-            "SELECT * FROM businesses WHERE NOT verified ORDER BY nsl_published_date DESC;"
-        )
-        return self.fetch_all(*query.build())
-
-    def get_businesses_with_violations(
-        self,
-        violation_type: Optional[str] = None,
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None
+    def fetch_all(
+        self, query: str, params: Optional[Dict[str, Any]] = None
     ) -> List[Dict[str, Any]]:
-        """Get businesses with violations matching criteria."""
-        query = QueryBuilder()
-        query.add("SELECT * FROM businesses WHERE 1=1")
-        
-        if violation_type:
-            query.add("AND violation_type = %s", violation_type)
-        
-        if start_date:
-            query.add("AND nsl_published_date >= %s", start_date)
-        
-        if end_date:
-            query.add("AND nsl_published_date <= %s", end_date)
-        
-        query.add("ORDER BY nsl_published_date DESC;")
-        
-        return self.fetch_all(*query.build())
+        """Fetch all results from a SQL query."""
+        return self.execute(query, params)
+
+    def fetch_one(
+        self, query: str, params: Optional[Dict[str, Any]] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Fetch a single result from a SQL query."""
+        results = self.execute(query, params)
+        return results[0] if results else None
 
     def create_tables(self) -> None:
-        """Create database tables if they don't exist."""
-        queries = [
-            """
-            CREATE EXTENSION IF NOT EXISTS pg_trgm;
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS businesses (
-                id SERIAL PRIMARY KEY,
-                business_name VARCHAR(200) NOT NULL,
-                address VARCHAR(200) NOT NULL,
-                city VARCHAR(100) NOT NULL,
-                state CHAR(2) NOT NULL,
-                zip_code VARCHAR(10) NOT NULL,
-                violation_type VARCHAR(100) NOT NULL,
-                nsl_published_date DATE NOT NULL,
-                nsl_effective_date DATE NOT NULL,
-                remediated_date DATE,
-                verified BOOLEAN DEFAULT FALSE,
-                created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-                updated_at TIMESTAMP,
-                UNIQUE(business_name, address)
-            );
-            """,
-            """
-            CREATE INDEX IF NOT EXISTS idx_businesses_state 
-            ON businesses(state);
-            """,
-            """
-            CREATE INDEX IF NOT EXISTS idx_businesses_verified 
-            ON businesses(verified);
-            """,
-            """
-            CREATE INDEX IF NOT EXISTS idx_businesses_dates 
-            ON businesses(nsl_published_date, nsl_effective_date);
-            """
-        ]
-        
-        for query in queries:
-            self.execute(query)
+        """Create all database tables."""
+        try:
+            Base.metadata.create_all(self.engine)
+        except SQLAlchemyError as e:
+            raise DatabaseError(f"Error creating database tables: {e}")
 
-    def close(self) -> None:
-        """Close all database connections."""
-        if self.pool:
-            self.pool.closeall() 
+    def drop_tables(self) -> None:
+        """Drop all database tables."""
+        try:
+            Base.metadata.drop_all(self.engine)
+        except SQLAlchemyError as e:
+            raise DatabaseError(f"Error dropping database tables: {e}")
+
+    def get_table_names(self) -> List[str]:
+        """Get all table names in the database."""
+        try:
+            inspector = inspect(self.engine)
+            return inspector.get_table_names()
+        except SQLAlchemyError as e:
+            raise DatabaseError(f"Error getting table names: {e}")
+
+    def table_exists(self, table_name: str) -> bool:
+        """Check if a table exists in the database."""
+        return table_name in self.get_table_names()
+
+    def get_table_schema(self, table_name: str) -> Dict[str, Any]:
+        """Get the schema of a table."""
+        if not self.table_exists(table_name):
+            raise DatabaseError(f"Table {table_name} does not exist")
+
+        try:
+            table = Table(table_name, metadata, autoload_with=self.engine)
+            return {
+                "columns": {
+                    col.name: {
+                        "type": str(col.type),
+                        "nullable": col.nullable,
+                        "primary_key": col.primary_key,
+                    }
+                    for col in table.columns
+                }
+            }
+        except SQLAlchemyError as e:
+            raise DatabaseError(f"Error getting table schema: {e}")
+
+    def vacuum_analyze(self, table_name: Optional[str] = None) -> None:
+        """Run VACUUM ANALYZE on the database or a specific table."""
+        if not self.engine:
+            raise DatabaseError("Database engine not initialized")
+
+        with self.engine.connect() as conn:
+            try:
+                if conn.in_transaction():
+                    conn.execute(text("COMMIT"))
+                if table_name:
+                    conn.execute(text(f"VACUUM ANALYZE {table_name}"))
+                else:
+                    conn.execute(text("VACUUM ANALYZE"))
+            except SQLAlchemyError as e:
+                raise DatabaseError(f"Error running VACUUM ANALYZE: {e}")
+
+    def get_row_count(self, table_name: str) -> int:
+        """Get the number of rows in a table."""
+        if not self.table_exists(table_name):
+            raise DatabaseError(f"Table {table_name} does not exist")
+
+        try:
+            with self.session_scope() as session:
+                result = session.execute(text(f"SELECT COUNT(*) FROM {table_name}"))
+                count = result.scalar()
+                return cast(int, count) if count is not None else 0
+        except SQLAlchemyError as e:
+            raise DatabaseError(f"Error getting row count: {e}")
+
+    def get_database_size(self) -> Dict[str, Any]:
+        """Get the size of the database and its tables."""
+        try:
+            with self.session_scope() as session:
+                # Get total database size
+                total_size_query = text(
+                    """
+                SELECT pg_size_pretty(pg_database_size(current_database())) as size,
+                       pg_database_size(current_database()) as bytes
+                """
+                )
+                total_size = dict(session.execute(total_size_query).fetchone()._mapping)
+
+                # Get size of each table
+                table_size_query = text(
+                    """
+                SELECT relname as table,
+                       pg_size_pretty(pg_total_relation_size(C.oid)) as size,
+                       pg_total_relation_size(C.oid) as bytes
+                FROM pg_class C
+                LEFT JOIN pg_namespace N ON (N.oid = C.relnamespace)
+                WHERE nspname NOT IN ('pg_catalog', 'information_schema')
+                AND C.relkind <> 'i'
+                AND nspname !~ '^pg_toast'
+                ORDER BY pg_total_relation_size(C.oid) DESC
+                """
+                )
+                tables = [dict(row._mapping) for row in session.execute(table_size_query)]
+
+                return {"total": total_size, "tables": tables}
+        except SQLAlchemyError as e:
+            raise DatabaseError(f"Error getting database size: {e}")
+
+
+T = TypeVar("T", bound=Base)
+
+
+def get_or_create(
+    session: Any, model: Type[T], defaults: Optional[Dict[str, Any]] = None, **kwargs
+) -> tuple[T, bool]:
+    """Get an instance of a model or create it if it doesn't exist."""
+    instance = session.query(model).filter_by(**kwargs).first()
+    if instance:
+        return instance, False
+    else:
+        params = dict((k, v) for k, v in kwargs.items())
+        params.update(defaults or {})
+        instance = model(**params)
+        try:
+            session.add(instance)
+            session.commit()
+            return instance, True
+        except Exception:
+            session.rollback()
+            raise
