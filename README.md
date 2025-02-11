@@ -434,3 +434,99 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 **Note**: This project is in active development. Contributions are welcome.
+
+## Independent Simple Scraper Execution
+
+### Minimum Requirements for Simple Scraper
+- Python 3.8+
+- Google Chrome Browser
+- Git
+
+### Basic Installation (Windows/Linux/Mac)
+
+1. Clone the repository:
+```bash
+git clone <repository-url>
+cd business-address-scrapper
+```
+
+2. Create and activate virtual environment:
+
+Windows:
+```powershell
+python -m venv venv
+.\venv\Scripts\activate
+```
+
+Linux/Mac:
+```bash
+python -m venv venv
+source venv/bin/activate
+```
+
+3. Install basic dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+4. Configure environment variables:
+```bash
+# Windows
+copy .env.example .env
+
+# Linux/Mac
+cp .env.example .env
+```
+
+### Using the Simple Scraper
+
+1. Prepare input CSV file with business names in the first column
+
+2. Run the scraper:
+```bash
+python simple_scraper.py input.csv output.csv
+```
+
+3. Additional options:
+```bash
+python simple_scraper.py --input input.csv --output output.csv --retries 3 --wait 5
+```
+
+### Simple Scraper Configuration
+
+The scraper can run in two modes:
+1. **Local Mode**: Uses local Chrome and webdriver-manager
+2. **Container Mode**: Uses pre-configured Chrome and ChromeDriver
+
+To configure the mode:
+1. Edit `.env`:
+```env
+# Execution mode
+EXECUTION_ENV=local  # or 'container'
+
+# Browser settings
+CHROME_BINARY_PATH=  # Leave empty for local
+CHROME_DRIVER_PATH=  # Leave empty for local
+HEADLESS_MODE=false  # true/false
+```
+
+### Simple Scraper Troubleshooting
+
+1. Chrome/ChromeDriver Issues:
+   - Ensure Chrome is installed
+   - Update Chrome to latest version
+   - Clear browser cache/cookies
+
+2. Permission Issues:
+   - Verify write permissions in output directory
+   - Run with appropriate privileges
+
+3. Resource Issues:
+   - Increase system memory allocation
+   - Adjust scraping delays in .env
+
+4. Simple Scraper Logs:
+```bash
+# View recent logs
+tail -f logs/scraper.log
+```
